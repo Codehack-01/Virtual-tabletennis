@@ -31,12 +31,43 @@ describe('RallyController', () => {
     rally.update(1420, ball, [{ kind: 'table-bounce', side: 'player' }]);
     expect(rally.state.opponentScore).toBe(1);
     expect(rally.state.message).toContain('Double bounce');
-    rally.update(3019, ball, []);
+    rally.update(3419, ball, []);
     expect(rally.state.phase).toBe('point-over');
     expect(ball.state.status).toBe('out');
-    rally.update(3020, ball, []);
+    rally.update(3420, ball, []);
     expect(rally.state.phase).toBe('serve');
     expect(ball.state.status).toBe('in-play');
+  });
+
+  it('records each point for the scoreboard and celebrations', () => {
+    const ball = new BallSimulation();
+    const rally = new RallyController();
+    beginServe(rally, ball);
+    rally.update(1410, ball, [{ kind: 'table-bounce', side: 'player' }, { kind: 'paddle-hit', side: 'player' }]);
+    rally.update(1420, ball, [{ kind: 'table-bounce', side: 'opponent' }, { kind: 'table-bounce', side: 'opponent' }]);
+    expect(rally.state.lastPoint).toMatchObject({ winner: 'player', rallyHits: 1, gameOver: false });
+    const firstId = rally.state.lastPoint!.id;
+    rally.update(3420, ball, []);
+    rally.update(3430, ball, [{ kind: 'table-bounce', side: 'player' }, { kind: 'table-bounce', side: 'player' }]);
+    expect(rally.state.lastPoint).toMatchObject({ winner: 'opponent', reason: 'Double bounce' });
+    expect(rally.state.lastPoint!.id).toBeGreaterThan(firstId);
+  });
+
+  it('flags the match-winning point and restarts from 0–0', () => {
+    const ball = new BallSimulation();
+    const rally = new RallyController();
+    beginServe(rally, ball);
+    let now = 1400;
+    for (let point = 0; point < 11; point++) {
+      rally.update((now += 10), ball, [{ kind: 'table-bounce', side: 'player' }, { kind: 'table-bounce', side: 'player' }]);
+      rally.update((now += 2000), ball, []);
+    }
+    expect(rally.state.phase).toBe('game-over');
+    expect(rally.state.opponentScore).toBe(11);
+    expect(rally.state.lastPoint).toMatchObject({ winner: 'opponent', gameOver: true });
+    rally.start(ball, now);
+    expect(rally.state).toMatchObject({ phase: 'pre-serve', playerScore: 0, opponentScore: 0, lastPoint: null });
+    expect(rally.state.stats.serves).toBe(0);
   });
 
   it('returns a legal shot with the predictable opponent', () => {

@@ -6,6 +6,8 @@ export type Hand = 'right' | 'left';
 export type ReferenceFrame = 'camera' | 'body';
 export type ModelVariant = 'lite' | 'full';
 export type Delegate = 'GPU' | 'CPU';
+/** Backdrop around the court: open-air field or indoor hall. */
+export type Environment = 'outdoor' | 'indoor';
 
 export interface Settings {
   hand: Hand;
@@ -39,6 +41,7 @@ export interface Settings {
   /** Tilt the paddle to follow the forearm angle. */
   rollEnabled: boolean;
   showOverlay: boolean;
+  environment: Environment;
   /** Speed needed to begin a swing candidate (image heights/s). */
   swingStartSpeed: number;
   /** Speed below which an active swing ends. Kept below start for hysteresis. */
@@ -84,6 +87,7 @@ export const DEFAULT_SETTINGS: Settings = {
   depthGain: 1,
   rollEnabled: false,
   showOverlay: true,
+  environment: 'outdoor',
   swingStartSpeed: 1.8,
   swingEndSpeed: 0.8,
   swingMinDurationMs: 80,

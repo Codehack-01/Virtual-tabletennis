@@ -1,6 +1,7 @@
 import type { Settings } from '../config';
 import type { MotionState, TrackingStatus } from '../motion/motionEstimator';
 import { ZERO, type Vec3 } from '../motion/vector';
+import { BLADE_RADIUS, GRIP_TO_BLADE, TABLE_PHYSICS } from '../physics/ballPhysics';
 import { normalize, type Calibration } from './calibration';
 
 /**
@@ -68,7 +69,9 @@ const DEPTH_DEADBAND = 0.35;
 // Measured against the supplied 17:13 reference: the shoulder begins high in
 // the upper-left of the court view and the full chain reaches the ready grip
 // without pulling that shoulder down toward the table.
-export const ARM_RIG = { upper: 0.4, fore: 0.42, shoulderHeight: 0.42, shoulderDepth: 0.3 };
+// Visual arm proportions. Shorter than a real arm because the camera sits close
+// behind the player: full-length bones filled the middle of the screen.
+export const ARM_RIG = { upper: 0.24, fore: 0.24, shoulderHeight: 0.24, shoulderDepth: 0.17 };
 const SHOULDER_SMOOTH_MS = 85;
 const MAX_SHOULDER_SPEED_MPS = 2;
 const ELBOW_BEND_SMOOTH_MS = 140;
@@ -96,6 +99,13 @@ const REST_RELEASE_FULL = 0.9;
 const MAX_RENDER_SPEED_MPS = 8;
 const RAW_WRIST_BLEND_MAX = 0.65;
 const MODE_BLEND_MS = 55;
+const BLADE_HALF_THICKNESS = 0.007;
+const TABLE_CLEARANCE_M = 0.012;
+// A low racket just in front of the near edge is technically outside the table
+// box, but the camera angle still lets the tabletop cut across it. Treat this
+// narrow player-side strip as part of the clearance zone so the blade remains
+// visually whole.
+const NEAR_EDGE_VISUAL_MARGIN_M = 0.18;
 
 
 function toWorld(n: Vec3, depth: boolean): Vec3 {
@@ -272,7 +282,6 @@ export class PaddleController {
       // Joints for backhand intent: the current camera frame when available
       // (low latency), otherwise the last filtered offsets.
       const intentRigOffsets = motion.rawArmOffsets ?? motion.armOffsets;
-      p.arm = this.solveArm(motion, cal, settings, dt, firstUpdate);
       // The blade extends outward from the tracked grip in the normal ready
       // stance. During a cross-body reach it turns over progressively so its
       // contact surface leads toward the opposite edge.
@@ -306,6 +315,8 @@ export class PaddleController {
         p.pitch = 0;
         p.yaw = 0;
       }
+      constrainPaddleAboveTable(p);
+      p.arm = this.solveArm(motion, cal, settings, dt, firstUpdate);
     } else {
       // Tracking loss must never steer the paddle. Keep its last position and
       // make it non-collidable via `tracked = false`; reacquisition blends from
@@ -393,6 +404,57 @@ export class PaddleController {
     const elbow = solveElbow(shoulder, hand, ARM_RIG.upper, ARM_RIG.fore, this.elbowBend);
     return { hand, elbow, shoulder };
   }
+}
+
+/**
+ * Keep the complete rotated blade readable above the tabletop/near edge. The
+ * tracked point is the grip, so constraining only that point still lets the
+ * circular blade pass through the table when it is rolled sideways.
+ */
+export function constrainPaddleAboveTable(pose: PaddlePose): number {
+  const rotate = (v: Vec3): Vec3 => {
+    const cr = Math.cos(pose.roll);
+    const sr = Math.sin(pose.roll);
+    const cp = Math.cos(pose.pitch);
+    const sp = Math.sin(pose.pitch);
+    const cy = Math.cos(pose.yaw);
+    const sy = Math.sin(pose.yaw);
+    // Same intrinsic XYZ order used by Three.js for the paddle group.
+    const x1 = cr * v.x - sr * v.y;
+    const y1 = sr * v.x + cr * v.y;
+    const z1 = v.z;
+    const x2 = x1;
+    const y2 = cp * y1 - sp * z1;
+    const z2 = sp * y1 + cp * z1;
+    return {
+      x: cy * x2 + sy * z2,
+      y: y2,
+      z: -sy * x2 + cy * z2,
+    };
+  };
+  const offset = rotate({ x: 0, y: GRIP_TO_BLADE, z: 0 });
+  const centre = add(pose.position, offset);
+  const ex = rotate({ x: 1, y: 0, z: 0 });
+  const ey = rotate({ x: 0, y: 1, z: 0 });
+  const ez = rotate({ x: 0, y: 0, z: 1 });
+  const extent = (axis: keyof Vec3) => BLADE_RADIUS * Math.hypot(ex[axis], ey[axis])
+    + BLADE_HALF_THICKNESS * Math.abs(ez[axis]);
+  const extentX = extent('x');
+  const extentY = extent('y');
+  const extentZ = extent('z');
+  const halfWidth = TABLE_PHYSICS.width / 2;
+  const halfLength = TABLE_PHYSICS.length / 2;
+  const overlapsWidth = centre.x + extentX >= -halfWidth && centre.x - extentX <= halfWidth;
+  const overlapsDepth = centre.z + extentZ >= -halfLength
+    && centre.z - extentZ <= halfLength + NEAR_EDGE_VISUAL_MARGIN_M;
+  if (!overlapsWidth || !overlapsDepth) return 0;
+  const minimumY = centre.y - extentY;
+  const safeY = TABLE_PHYSICS.height + TABLE_CLEARANCE_M;
+  if (minimumY >= safeY) return 0;
+  const correction = safeY - minimumY;
+  pose.position.y += correction;
+  if (pose.velocity.y < 0) pose.velocity.y = 0;
+  return correction;
 }
 
 /** Shoulder-hand distance implied by the tracked elbow angle and rig lengths. */

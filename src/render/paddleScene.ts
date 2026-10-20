@@ -3,6 +3,9 @@ import type { PaddlePose } from '../control/paddleController';
 import { BALL_RADIUS, BLADE_RADIUS, GRIP_TO_BLADE, TABLE_PHYSICS, type BallState, type OpponentPaddlePose } from '../physics/ballPhysics';
 import type { RallySnapshot } from '../game/rallyController';
 import type { Vec3 } from '../motion/vector';
+import type { EnvironmentName, SceneEnvironment } from './environment';
+import { buildField } from './field';
+import { buildIndoorHall } from './indoorHall';
 
 const TABLE = { ...TABLE_PHYSICS, thickness: 0.03 };
 const TRAIL_POINTS = 24;
@@ -19,13 +22,12 @@ const ARM_VISUAL_HOLD_MS = 180;
 export class PaddleScene {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(58, 1, 0.05, 50);
+  private camera = new THREE.PerspectiveCamera(58, 1, 0.05, 600);
   private paddle = new THREE.Group();
   private opponentPaddle = new THREE.Group();
   private playerArm = new THREE.Group();
   private upperArm!: THREE.Mesh;
   private forearm!: THREE.Mesh;
-  private shoulderJoint!: THREE.Mesh;
   private elbowJoint!: THREE.Mesh;
   private handMesh!: THREE.Mesh;
   private lastArmVisualAt = -Infinity;
@@ -40,8 +42,11 @@ export class PaddleScene {
   private ballTrailPositions = new Float32Array(BALL_TRAIL_POINTS * 3);
   private ballTrailFilled = 0;
   private resizeObserver: ResizeObserver;
+  private ambientLight: THREE.HemisphereLight;
+  private keyLight: THREE.DirectionalLight;
+  private environments: Record<EnvironmentName, SceneEnvironment>;
 
-  constructor(private container: HTMLElement) {
+  constructor(private container: HTMLElement, environment: EnvironmentName = 'outdoor') {
     try {
       this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     } catch {
@@ -53,15 +58,16 @@ export class PaddleScene {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     container.appendChild(this.renderer.domElement);
 
-    this.scene.background = new THREE.Color(0x0b1018);
     this.camera.fov = CAMERA.fov;
     this.camera.position.set(CAMERA.position.x, CAMERA.position.y, CAMERA.position.z);
     this.camera.lookAt(CAMERA.target.x, CAMERA.target.y, CAMERA.target.z);
     this.camera.updateProjectionMatrix();
 
-    this.scene.add(new THREE.HemisphereLight(0xcfe5ff, 0x17202c, 1.35));
-    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
-    sun.position.set(-2.4, 4.5, 2.8);
+    // Colours, intensities and position come from the active environment.
+    this.ambientLight = new THREE.HemisphereLight();
+    this.scene.add(this.ambientLight);
+    const sun = new THREE.DirectionalLight();
+    this.keyLight = sun;
     sun.castShadow = true;
     sun.shadow.mapSize.set(1024, 1024);
     sun.shadow.camera.left = -3;
@@ -70,6 +76,9 @@ export class PaddleScene {
     sun.shadow.camera.bottom = -2;
     this.scene.add(sun);
 
+    this.environments = { outdoor: buildField(this.renderer), indoor: buildIndoorHall() };
+    for (const env of Object.values(this.environments)) this.scene.add(env.group);
+    this.setEnvironment(environment);
     this.buildTable();
     this.buildPaddle();
     this.buildPlayerArm();
@@ -110,6 +119,21 @@ export class PaddleScene {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.resize();
+  }
+
+  /** Show one backdrop and apply its sky/room colour and lighting. */
+  setEnvironment(name: EnvironmentName) {
+    for (const [key, env] of Object.entries(this.environments)) env.group.visible = key === name;
+    const env = this.environments[name];
+    this.scene.background = env.background;
+    this.scene.fog = env.fog;
+    const { light } = env;
+    this.ambientLight.color.set(light.sky);
+    this.ambientLight.groundColor.set(light.ground);
+    this.ambientLight.intensity = light.ambient;
+    this.keyLight.color.set(light.key);
+    this.keyLight.intensity = light.keyIntensity;
+    this.keyLight.position.set(...light.keyPosition);
   }
 
   private buildTable() {
@@ -180,8 +204,9 @@ export class PaddleScene {
     tape.position.set(0, TABLE.height + TABLE.netHeight, 0);
     this.scene.add(tape);
 
+    // The court surface stops at the barriers; the grass field starts outside them.
     const floorSurface = new THREE.Mesh(
-      new THREE.PlaneGeometry(12, 12),
+      new THREE.PlaneGeometry(5.2, 8.2),
       new THREE.MeshStandardMaterial({ color: 0x472c2a, roughness: 0.88 }),
     );
     floorSurface.rotation.x = -Math.PI / 2;
@@ -221,22 +246,29 @@ export class PaddleScene {
     const wood = new THREE.MeshStandardMaterial({ color: 0xc8a165, roughness: 0.7, transparent: true });
     this.bladeMaterials = [red, black, wood];
 
-    const core = new THREE.Mesh(new THREE.CylinderGeometry(BLADE_RADIUS, BLADE_RADIUS, 0.012, 48), wood);
+    // Drawn 15% under regulation size so it stays in proportion with the
+    // shortened on-screen arm. Physics keeps the real BLADE_RADIUS and the same
+    // blade centre, so hitting is unchanged.
+    const bladeRadius = BLADE_RADIUS * 0.85;
+    const core = new THREE.Mesh(new THREE.CylinderGeometry(bladeRadius, bladeRadius, 0.011, 48), wood);
     core.rotation.x = Math.PI / 2;
     core.position.set(0, GRIP_TO_BLADE, 0);
     this.paddle.add(core);
 
     // Cylinder axis along z so the rubber faces the table (red) and the player (black).
     const face = (mat: THREE.Material, z: number) => {
-      const m = new THREE.Mesh(new THREE.CylinderGeometry(BLADE_RADIUS, BLADE_RADIUS, 0.005, 40), mat);
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(bladeRadius, bladeRadius, 0.005, 40), mat);
       m.rotation.x = Math.PI / 2;
       m.position.set(0, GRIP_TO_BLADE, z);
       return m;
     };
     // Bright rubber faces the player/camera so the blade remains readable.
     this.paddle.add(face(black, -0.004), face(red, 0.004));
-    const handle = new THREE.Mesh(new THREE.CapsuleGeometry(0.019, 0.072, 6, 12), wood);
-    handle.position.y = GRIP_TO_BLADE - BLADE_RADIUS - 0.045;
+    // The handle runs from just below the grip point up into the blade.
+    const handleRadius = 0.017;
+    const handleLength = 0.062;
+    const handle = new THREE.Mesh(new THREE.CapsuleGeometry(handleRadius, handleLength, 6, 12), wood);
+    handle.position.y = GRIP_TO_BLADE - bladeRadius + 0.01 - (handleLength / 2 + handleRadius);
     handle.scale.z = 0.7;
     this.paddle.add(handle);
     this.paddle.traverse((child) => {
@@ -272,19 +304,48 @@ export class PaddleScene {
   private buildPlayerArm() {
     const skin = new THREE.MeshStandardMaterial({ color: 0x9a6245, roughness: 0.82 });
     const shirt = new THREE.MeshStandardMaterial({ color: 0x263a5a, roughness: 0.75 });
-    const limb = (radius: number, material: THREE.Material) => {
-      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius * 1.05, 1, 18), material);
+    // Limbs taper: radiusTop is the end toward the hand, radiusBottom toward the body.
+    const limb = (radiusTop: number, radiusBottom: number, material: THREE.Material, openEnded = false) => {
+      const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radiusTop, radiusBottom, 1, 18, 1, openEnded), material);
       mesh.castShadow = true;
       this.playerArm.add(mesh);
       return mesh;
     };
-    this.upperArm = limb(0.029, shirt);
-    this.forearm = limb(0.026, skin);
-    this.shoulderJoint = new THREE.Mesh(new THREE.SphereGeometry(0.034, 18, 12), shirt);
+    // The upper arm sits close to the camera, so it fades out toward the
+    // shoulder instead of ending in a floating cap or filling the screen.
+    const fade = document.createElement('canvas');
+    fade.width = 4;
+    fade.height = 64;
+    const fadeCtx = fade.getContext('2d')!;
+    const gradient = fadeCtx.createLinearGradient(0, 0, 0, 64);
+    // Opaque at the elbow end of the cylinder, transparent at the shoulder end.
+    // Only the stretch nearest the elbow stays solid; the rest fades away
+    // early because, in the ready stance, the upper arm points at the camera.
+    gradient.addColorStop(0, '#fff');
+    gradient.addColorStop(0.12, '#fff');
+    gradient.addColorStop(0.7, '#000');
+    gradient.addColorStop(1, '#000');
+    fadeCtx.fillStyle = gradient;
+    fadeCtx.fillRect(0, 0, 4, 64);
+    const sleeve = shirt.clone();
+    sleeve.alphaMap = new THREE.CanvasTexture(fade);
+    sleeve.transparent = true;
+    sleeve.depthWrite = false;
+    // Render the inner wall too, so the open elbow end reads as a cuff rather
+    // than a see-through tube.
+    sleeve.side = THREE.DoubleSide;
+    // Open-ended: a cap disc would show at the faded shoulder end. Slightly
+    // wider than the elbow so the cuff sits over it.
+    this.upperArm = limb(0.033, 0.037, sleeve, true);
+    // A half-transparent limb would still cast a solid shadow.
+    this.upperArm.castShadow = false;
+    // Adult proportions: a forearm tapering from ~6 cm at the elbow to ~4.5 cm
+    // at the wrist, so the arm doesn't read as a child's next to the paddle.
+    this.forearm = limb(0.022, 0.03, skin);
     this.elbowJoint = new THREE.Mesh(new THREE.SphereGeometry(0.029, 18, 12), skin);
-    this.handMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.025, 0.045, 6, 12), skin);
+    this.handMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.024, 0.04, 6, 12), skin);
     this.handMesh.rotation.z = Math.PI / 2;
-    for (const mesh of [this.shoulderJoint, this.elbowJoint, this.handMesh]) {
+    for (const mesh of [this.elbowJoint, this.handMesh]) {
       mesh.castShadow = true;
       this.playerArm.add(mesh);
     }
@@ -330,7 +391,6 @@ export class PaddleScene {
       this.lastArmVisualAt = now;
       this.placeLimb(this.upperArm, pose.arm.shoulder, pose.arm.elbow);
       this.placeLimb(this.forearm, pose.arm.elbow, pose.arm.hand);
-      this.shoulderJoint.position.set(pose.arm.shoulder.x, pose.arm.shoulder.y, pose.arm.shoulder.z);
       this.elbowJoint.position.set(pose.arm.elbow.x, pose.arm.elbow.y, pose.arm.elbow.z);
       this.handMesh.position.set(pose.arm.hand.x, pose.arm.hand.y, pose.arm.hand.z);
       this.handMesh.rotation.z = pose.roll;

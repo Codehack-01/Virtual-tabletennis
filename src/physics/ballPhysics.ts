@@ -54,6 +54,16 @@ const OPPONENT_READY_POSITION = { x: 0, y: 0.92, z: -1.08 };
 const OPPONENT_FOREHAND_ROLL = 1.08;
 const OPPONENT_BACKHAND_ROLL = -1.08;
 const OPPONENT_READY_PITCH = -0.1;
+// The CPU picks a strike depth along the ball's predicted path: at its ready
+// plane when the bounce leaves the ball at a comfortable height, or further
+// back when a deep or high bounce needs time to come down (or to rise).
+const OPPONENT_STRIKE_Z_NEAR = -1.0;
+const OPPONENT_STRIKE_Z_FAR = -1.6;
+const OPPONENT_BLADE_MIN_Y = 0.86;
+const OPPONENT_BLADE_MAX_Y = 1.34;
+const OPPONENT_LATERAL_SPEED = 2.6;
+const OPPONENT_VERTICAL_SPEED = 2.2;
+const OPPONENT_DEPTH_SPEED = 2.0;
 // Assisted returns may use the whole table, but should not turn a successful
 // edge reach into an unavoidable sideline fault because of noisy 2D velocity.
 const ASSISTED_LANDING_HALF_WIDTH = TABLE_PHYSICS.width / 2 - BALL_RADIUS - 0.06;
@@ -287,12 +297,44 @@ export class BallSimulation {
     }
   }
 
+  /**
+   * Where the incoming ball crosses the plane z = zPlane, following its
+   * parabola through a table bounce if it lands first. Drag is ignored: over
+   * the ~0.5 s of a return it shifts the crossing by only a few millimetres.
+   */
+  private predictCrossing(zPlane: number): { x: number; y: number; bounced: boolean } | null {
+    const s = this.state;
+    if (s.velocity.z >= -0.05 || s.position.z <= zPlane) return null;
+    const surface = TABLE_PHYSICS.height + BALL_RADIUS;
+    let p = { ...s.position };
+    let v = { ...s.velocity };
+    let bounced = false;
+    for (let leg = 0; leg < 3; leg++) {
+      const tPlane = (zPlane - p.z) / v.z;
+      // Time until the ball falls back to the table surface on this arc.
+      const a = 0.5 * GRAVITY;
+      const disc = v.y * v.y - 4 * a * (p.y - surface);
+      const tSurface = disc >= 0 ? (-v.y - Math.sqrt(disc)) / (2 * a) : Infinity;
+      const zAtSurface = p.z + v.z * tSurface;
+      const landsOnTable = tSurface > 1e-4 && tSurface < tPlane
+        && Math.abs(p.x + v.x * tSurface) <= TABLE_PHYSICS.width / 2 && Math.abs(zAtSurface) <= TABLE_PHYSICS.length / 2;
+      if (!landsOnTable) {
+        return { x: p.x + v.x * tPlane, y: p.y + v.y * tPlane + a * tPlane * tPlane, bounced };
+      }
+      p = { x: p.x + v.x * tSurface, y: surface, z: zAtSurface };
+      v = { x: v.x * 0.985, y: -(v.y + 2 * a * tSurface) * this.tuning.tableRestitution, z: v.z * 0.985 };
+      bounced = true;
+    }
+    return null;
+  }
+
   private updateOpponentPaddle(dt: number): void {
     const paddle = this.opponentPaddle;
     paddle.swing = Math.max(0, paddle.swing - dt * 7);
     if (!this.opponentActive) {
       paddle.position.x = moveToward(paddle.position.x, 0, 2.4 * dt);
       paddle.position.y = moveToward(paddle.position.y, 0.92, 1.8 * dt);
+      paddle.position.z = moveToward(paddle.position.z, OPPONENT_READY_POSITION.z, OPPONENT_DEPTH_SPEED * dt);
       paddle.roll = moveToward(paddle.roll, OPPONENT_FOREHAND_ROLL, 5 * dt);
       paddle.pitch = moveToward(paddle.pitch, OPPONENT_READY_PITCH, 3 * dt);
       paddle.yaw = moveToward(paddle.yaw, 0, 3 * dt);
@@ -303,14 +345,33 @@ export class BallSimulation {
     const s = this.state;
     let targetBladeX = -Math.sin(OPPONENT_FOREHAND_ROLL) * GRIP_TO_BLADE;
     let targetBladeY = OPPONENT_READY_POSITION.y + Math.cos(OPPONENT_FOREHAND_ROLL) * GRIP_TO_BLADE;
+    let targetZ = OPPONENT_READY_POSITION.z;
     let targetRoll = OPPONENT_FOREHAND_ROLL;
     let targetPitch = OPPONENT_READY_PITCH;
     let targetYaw = 0;
-    let targetY = OPPONENT_READY_POSITION.y;
     if (s.status === 'in-play' && s.velocity.z < -0.15) {
-      const strikeZ = paddle.position.z + BALL_RADIUS;
-      const timeToStrike = Math.max(0, Math.min(1.2, (strikeZ - s.position.z) / s.velocity.z));
-      targetBladeX = Math.max(-0.72, Math.min(0.72, s.position.x + s.velocity.x * timeToStrike));
+      // Scan strike depths from the ready plane backward and take the first
+      // where the ball has already bounced and sits at a hittable height. A
+      // real player steps back for a deep or high ball instead of reaching
+      // for it on the rise or letting it pass overhead.
+      let best: { x: number; y: number; z: number; miss: number } | null = null;
+      for (let z = OPPONENT_READY_POSITION.z; z >= OPPONENT_STRIKE_Z_FAR - 1e-6; z -= 0.05) {
+        const crossing = this.predictCrossing(z);
+        if (!crossing) continue;
+        const miss = !crossing.bounced ? 1
+          : Math.max(0, OPPONENT_BLADE_MIN_Y - crossing.y, crossing.y - OPPONENT_BLADE_MAX_Y);
+        if (!best || miss < best.miss) best = { ...crossing, z, miss };
+        if (miss === 0) break;
+      }
+      if (!best) {
+        const near = this.predictCrossing(OPPONENT_STRIKE_Z_NEAR);
+        if (near) best = { ...near, z: OPPONENT_STRIKE_Z_NEAR, miss: 1 };
+      }
+      if (best) {
+        targetBladeX = Math.max(-0.72, Math.min(0.72, best.x));
+        targetBladeY = Math.max(OPPONENT_BLADE_MIN_Y, Math.min(OPPONENT_BLADE_MAX_Y, best.y));
+        targetZ = best.z;
+      }
       // A right-handed opponent uses a forehand on screen-left and crosses
       // into a backhand on screen-right. A small centre deadband stops the
       // racket from flipping sides when prediction noise straddles zero.
@@ -319,13 +380,6 @@ export class BallSimulation {
       targetRoll = paddle.stroke === 'forehand' ? OPPONENT_FOREHAND_ROLL : OPPONENT_BACKHAND_ROLL;
       targetPitch = Math.max(-0.24, Math.min(0.12, OPPONENT_READY_PITCH + s.velocity.y * 0.035));
       targetYaw = Math.max(-0.18, Math.min(0.18, -s.velocity.x * 0.045));
-      if (this.opponentReady) {
-        const predictedY = s.position.y + s.velocity.y * timeToStrike + 0.5 * GRAVITY * timeToStrike ** 2;
-        // The blade, rather than the hand, owns this limit. A near-horizontal
-        // racket has much less vertical handle-to-blade offset than the old
-        // upright pose, so it needs a little more hand raise for a high drive.
-        targetBladeY = Math.max(0.83, Math.min(1.24, predictedY));
-      }
     }
     paddle.roll = moveToward(paddle.roll, targetRoll, 7.5 * dt);
     paddle.pitch = moveToward(paddle.pitch, targetPitch, 4.5 * dt);
@@ -335,12 +389,12 @@ export class BallSimulation {
     // directly onto every ball.
     const bladeOffsetX = -Math.sin(paddle.roll) * GRIP_TO_BLADE;
     const bladeOffsetY = Math.cos(paddle.roll) * Math.cos(paddle.pitch) * GRIP_TO_BLADE;
-    const targetX = targetBladeX - bladeOffsetX;
-    targetY = targetBladeY - bladeOffsetY;
-    // Track mostly with lateral footwork. Vertical adjustment is deliberately
-    // slower and tightly bounded so it reads as a paddle raise, not a jump.
-    paddle.position.x = moveToward(paddle.position.x, targetX, 2.25 * dt);
-    paddle.position.y = moveToward(paddle.position.y, targetY, 0.9 * dt);
+    // Positioning starts as soon as the ball is on its way, from the predicted
+    // bounce, so the CPU is set before the ball arrives. Hitting still waits
+    // for the legal bounce (opponentReady).
+    paddle.position.x = moveToward(paddle.position.x, targetBladeX - bladeOffsetX, OPPONENT_LATERAL_SPEED * dt);
+    paddle.position.y = moveToward(paddle.position.y, targetBladeY - bladeOffsetY, OPPONENT_VERTICAL_SPEED * dt);
+    paddle.position.z = moveToward(paddle.position.z, targetZ, OPPONENT_DEPTH_SPEED * dt);
   }
 
   private opponentBladeCenter(): Vec3 {
@@ -466,9 +520,17 @@ export class BallSimulation {
     // realism presets retain progressively more of the player's face angle.
     const placementAssist = Math.min(1, requestedCollisionAssist + 0.35);
     const guidedLandingX = predictedLandingX + (legalLandingX - predictedLandingX) * placementAssist;
+    // Webcam strokes are mostly upward brushes, and the tracked wrist's
+    // vertical speed transfers almost fully, so a strong swing used to launch
+    // most returns over the far end. The same assistance that adds missing
+    // lift now also trims lift beyond what still lands deep on the table.
+    const liftedY = transferredY + Math.max(0, requiredLift - transferredY) * netAssist;
+    const deepLandingZ = -(TABLE_PHYSICS.length / 2 - 0.12);
+    const timeToDeepBounce = Math.max(0.2, (s.position.z - deepLandingZ) / Math.abs(outgoingZ));
+    const maximumLift = (tableSurface - s.position.y - 0.5 * GRAVITY * timeToDeepBounce ** 2) / timeToDeepBounce;
     s.velocity = {
       x: (guidedLandingX - s.position.x) / timeToTargetBounce,
-      y: transferredY + Math.max(0, requiredLift - transferredY) * netAssist,
+      y: liftedY - Math.max(0, liftedY - Math.max(maximumLift, requiredNetLift)) * netAssist,
       z: outgoingZ,
     };
     s.paddleHits++;

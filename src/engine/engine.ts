@@ -157,7 +157,7 @@ export class Engine {
   initializeScene(): void {
     if (this.scene || this.disposed) return;
     try {
-      this.scene = new PaddleScene(this.els.sceneContainer);
+      this.scene = new PaddleScene(this.els.sceneContainer, this.settings.environment);
       this.scene.render(this.paddlePose, this.ball.state, this.rally.state, this.ball.opponentPaddle);
     } catch (err) {
       this.fail('webgl', err);
@@ -278,6 +278,11 @@ export class Engine {
     if (prev.hand !== next.hand || prev.mirror !== next.mirror) this.estimator.reset();
     if (prev.hand !== next.hand || prev.mirror !== next.mirror) this.swingDetector.reset();
     if (!next.showOverlay && this.overlayCtx) clearOverlay(this.overlayCtx);
+    if (prev.environment !== next.environment && this.scene) {
+      this.scene.setEnvironment(next.environment);
+      // Redraw now: the render loop only runs once the camera is on.
+      if (this.phase !== 'running') this.scene.render(this.paddlePose, this.ball.state, this.rally.state, this.ball.opponentPaddle);
+    }
     if ((prev.model !== next.model || prev.delegate !== next.delegate) && this.phase === 'running') {
       void this.reloadTracker();
     }
@@ -426,7 +431,13 @@ export class Engine {
     this.ball.update(now, this.paddlePose, { collision: this.settings.collisionAssist, netClearance: this.settings.netClearanceAssist });
     const ballEvents = this.ball.consumeEvents();
     this.audio.play(ballEvents);
-    if (this.rally.state.phase !== 'idle') this.rally.update(now, this.ball, ballEvents);
+    if (this.rally.state.phase !== 'idle') {
+      const previousPoint = this.rally.state.lastPoint?.id;
+      this.rally.update(now, this.ball, ballEvents);
+      const point = this.rally.state.lastPoint;
+      // Only the match result has a sound; individual points stay silent.
+      if (point && point.id !== previousPoint && point.gameOver) this.audio.playGameOver(point.winner === 'player');
+    }
     this.scene?.render(this.paddlePose, this.ball.state, this.rally.state, this.ball.opponentPaddle);
     this.rafId = requestAnimationFrame(this.renderLoop);
   };

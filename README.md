@@ -51,7 +51,7 @@ Webcam ─▶ Tracking ─▶ Motion estimation ─▶ Paddle controller ─▶ 
 | Control | `control/calibration.ts`, `paddleController.ts` | Neutral + asymmetric range calibration; maps to a world-space paddle volume; hold / return-to-neutral / re-acquire blending; optional prediction. |
 | Render | `render/paddleScene.ts`, `overlay.ts` | Plain Three.js scene (table, net, paddle volume, paddle, trail, velocity arrow); 2D debug overlay. |
 | Engine | `engine/engine.ts` | Runs inference on each new video frame (`requestVideoFrameCallback`, rAF fallback), renders on rAF, collects metrics, runs calibration. |
-| UI | `App.tsx`, `ui/*` | React. Polls `engine.getSnapshot()` 5×/s for display only. No React state changes per frame. |
+| UI | `App.tsx`, `ui/*` | React. Polls `engine.getSnapshot()` 10×/s for display only. No React state changes per frame. |
 
 ### Key choices
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS } from '../config';
-import { bladeCenter } from '../physics/ballPhysics';
+import { BLADE_RADIUS, TABLE_PHYSICS, bladeCenter } from '../physics/ballPhysics';
 import { MotionEstimator } from '../motion/motionEstimator';
 import { defaultCalibration } from './calibration';
 import { ARM_RIG, PADDLE_AREA, PaddleController, solveElbow } from './paddleController';
@@ -161,11 +161,24 @@ describe('PaddleController handed orientation', () => {
     expect(upper / fore).toBeGreaterThan(0.8);
     expect(upper / fore).toBeLessThan(1.35);
     // The shoulder belongs to the player's body: above and behind the grip.
-    expect(pose.arm!.shoulder.y).toBeGreaterThan(pose.arm!.hand.y + 0.35);
-    expect(pose.arm!.shoulder.z).toBeGreaterThan(pose.arm!.hand.z + 0.2);
+    expect(pose.arm!.shoulder.y).toBeGreaterThan(pose.arm!.hand.y + 0.18);
+    expect(pose.arm!.shoulder.z).toBeGreaterThan(pose.arm!.hand.z + 0.1);
+    // ...but stays compact, so the rendered arm doesn't fill the screen centre.
+    expect(distance(pose.arm!.hand, pose.arm!.shoulder)).toBeLessThan(0.45);
     // Reference composition: a right-handed arm enters from the upper-left and
     // runs down-right toward the paddle rather than lying across the tabletop.
     expect(pose.arm!.shoulder.x).toBeLessThan(pose.arm!.hand.x);
+  });
+
+  it('keeps the complete sideways blade above the near table edge', () => {
+    const controller = new PaddleController();
+    const motion = trackedMotion(0);
+    motion.position.y = -0.3;
+    motion.rawPosition.y = -0.3;
+    const pose = controller.update(motion, defaultCalibration('camera'), DEFAULT_SETTINGS, 100);
+    const blade = bladeCenter(pose);
+    expect(blade.y - BLADE_RADIUS).toBeGreaterThanOrEqual(TABLE_PHYSICS.height + 0.0119);
+    expect(pose.arm!.hand).toEqual(pose.position);
   });
 
   it('keeps the shoulder still while the hand moves within reach', () => {

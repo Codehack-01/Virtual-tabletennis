@@ -12,6 +12,17 @@ export interface RallySnapshot {
   autoServeAt: number | null;
   serveAt: number | null;
   stats: RallyStats;
+  /** The most recent point; `id` increases with every point so the UI can react once. */
+  lastPoint: PointResult | null;
+}
+
+export interface PointResult {
+  id: number;
+  winner: 'player' | 'opponent';
+  reason: string;
+  /** Rally length (legal player returns) of the exchange that just ended. */
+  rallyHits: number;
+  gameOver: boolean;
 }
 
 export interface RallyStats {
@@ -27,7 +38,7 @@ export interface RallyStats {
   peakReturnSpeed: number;
 }
 
-const WIN_SCORE = 11;
+export const WIN_SCORE = 11;
 const emptyStats = (): RallyStats => ({
   serves: 0, contacts: 0, legalReturns: 0, misses: 0, netFaults: 0,
   longFaults: 0, doubleBounces: 0, opponentReturns: 0, averageReturnSpeed: 0, peakReturnSpeed: 0,
@@ -36,21 +47,34 @@ const emptyStats = (): RallyStats => ({
 export class RallyController {
   private snapshot: RallySnapshot = {
     phase: 'idle', playerScore: 0, opponentScore: 0, rallyHits: 0, bestRally: 0,
-    message: 'Start a rally when you are ready', autoServeAt: null, serveAt: null, stats: emptyStats(),
+    message: 'Start a rally when you are ready', autoServeAt: null, serveAt: null, stats: emptyStats(), lastPoint: null,
   };
   private playerBounces = 0;
   private opponentBounces = 0;
   private opponentReturnPending = false;
   private returnSpeedTotal = 0;
+  private nextPointId = 1;
 
   get state(): RallySnapshot {
-    return { ...this.snapshot, stats: { ...this.snapshot.stats } };
+    return {
+      ...this.snapshot,
+      stats: { ...this.snapshot.stats },
+      lastPoint: this.snapshot.lastPoint && { ...this.snapshot.lastPoint },
+    };
   }
 
   start(ball: BallSimulation, now = performance.now()): void {
     ball.setOpponentActive(true);
     ball.holdForServe();
     this.resetExchange();
+    // Start/Restart always begins a fresh match. Keeping the old score let a
+    // restart after game over end again on the very next point.
+    this.snapshot.playerScore = 0;
+    this.snapshot.opponentScore = 0;
+    this.snapshot.bestRally = 0;
+    this.snapshot.stats = emptyStats();
+    this.snapshot.lastPoint = null;
+    this.returnSpeedTotal = 0;
     this.snapshot.phase = 'pre-serve';
     this.snapshot.rallyHits = 0;
     this.snapshot.autoServeAt = null;
@@ -63,7 +87,7 @@ export class RallyController {
     ball.setOpponentActive(false);
     this.snapshot = {
       phase: 'idle', playerScore: 0, opponentScore: 0, rallyHits: 0, bestRally: 0,
-      message: 'Start a rally when you are ready', autoServeAt: null, serveAt: null, stats: emptyStats(),
+      message: 'Start a rally when you are ready', autoServeAt: null, serveAt: null, stats: emptyStats(), lastPoint: null,
     };
     this.returnSpeedTotal = 0;
     this.resetExchange();
@@ -201,7 +225,8 @@ export class RallyController {
     this.snapshot.message = gameWon
       ? `${winner === 'player' ? 'You win' : 'Opponent wins'} · ${reason}`
       : `${winner === 'player' ? 'Your point' : 'Opponent point'} · ${reason} · next serve soon`;
-    this.snapshot.autoServeAt = gameWon ? null : now + 1600;
+    this.snapshot.lastPoint = { id: this.nextPointId++, winner, reason, rallyHits: this.snapshot.rallyHits, gameOver: gameWon };
+    this.snapshot.autoServeAt = gameWon ? null : now + 2000;
     this.snapshot.serveAt = null;
     this.opponentReturnPending = false;
   }

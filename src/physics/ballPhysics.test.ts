@@ -146,6 +146,51 @@ describe('BallSimulation', () => {
     expect(sim.state.velocity.z).toBeGreaterThan(0);
   });
 
+  // Webcam strokes are mostly upward brushes: the tracked wrist can rise at
+  // several m/s while barely moving toward the table.
+  const upwardStroke = (swingY: number) => {
+    const sim = new BallSimulation();
+    sim.setOpponentActive(true);
+    const playerPaddle = { ...paddle, position: { x: 0, y: 1.04, z: 1.5 }, velocity: { x: 0, y: swingY, z: -0.6 }, roll: -Math.PI / 2 };
+    const playerBlade = bladeCenter(playerPaddle);
+    sim.state = {
+      position: { x: playerBlade.x, y: playerBlade.y, z: playerBlade.z - 0.01 },
+      velocity: { x: 0, y: -1, z: 3.2 }, status: 'in-play', bounces: 1, paddleHits: 0, lastEvent: '',
+    };
+    sim.step(0.01, playerPaddle, { collision: 0.65, netClearance: 0.4 });
+    expect(sim.state.paddleHits).toBe(1);
+    return { sim, noPaddle: { ...playerPaddle, tracked: false } };
+  };
+
+  it.each([3, 5, 7])('lands a strong upward webcam stroke (%s m/s) on the opponent table', (swingY) => {
+    const { sim, noPaddle } = upwardStroke(swingY);
+    let bounce: { side?: string } | undefined;
+    for (let i = 0; i < 1000 && !bounce && sim.state.status === 'in-play'; i++) {
+      sim.step(1 / 240, noPaddle, { collision: 0.65, netClearance: 0.4 });
+      bounce = sim.consumeEvents().find((event) => event.kind === 'table-bounce');
+    }
+    expect(bounce?.side).toBe('opponent');
+  });
+
+  it.each([3, 5, 7])('lets the CPU reach and return a high, deep ball from a %s m/s upward stroke', (swingY) => {
+    const { sim, noPaddle } = upwardStroke(swingY);
+    let opponentHit = false;
+    for (let i = 0; i < 1000 && sim.state.status === 'in-play' && !opponentHit; i++) {
+      sim.step(1 / 240, noPaddle, { collision: 0.65, netClearance: 0.4 });
+      const events = sim.consumeEvents();
+      if (events.some((event) => event.kind === 'table-bounce' && event.side === 'opponent')) sim.setOpponentReady(true);
+      opponentHit = events.some((event) => event.kind === 'opponent-hit');
+    }
+    expect(opponentHit).toBe(true);
+    // ...and its reply lands legally on the player's half.
+    let reply: { side?: string } | undefined;
+    for (let i = 0; i < 1000 && !reply && sim.state.status === 'in-play'; i++) {
+      sim.step(1 / 240, noPaddle, { collision: 0.65, netClearance: 0.4 });
+      reply = sim.consumeEvents().find((event) => event.kind === 'table-bounce' || event.kind === 'net');
+    }
+    expect(reply).toMatchObject({ kind: 'table-bounce', side: 'player' });
+  });
+
   it.each([
     { x: -0.5, stroke: 'forehand' as const, rollSign: 1 },
     { x: 0.5, stroke: 'backhand' as const, rollSign: -1 },
