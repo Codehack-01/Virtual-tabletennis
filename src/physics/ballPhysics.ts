@@ -54,6 +54,10 @@ const OPPONENT_READY_POSITION = { x: 0, y: 0.92, z: -1.08 };
 const OPPONENT_FOREHAND_ROLL = 1.08;
 const OPPONENT_BACKHAND_ROLL = -1.08;
 const OPPONENT_READY_PITCH = -0.1;
+// Player return shaping (m/s and metres).
+const MIN_RETURN_SPEED = 4.0;
+const MIN_OPENING_RETURN_SPEED = 3.6;
+const MAX_NET_CLEARANCE = 0.2;
 // The CPU picks a strike depth along the ball's predicted path: at its ready
 // plane when the bounce leaves the ball at a comfortable height, or further
 // back when a deep or high bounce needs time to come down (or to rise).
@@ -79,8 +83,17 @@ export interface BallTuning {
   tableRestitution: number;
   paddleRestitution: number;
   swingTransfer: number;
+  /**
+   * Base chance (0..1) that the CPU makes a mistake on a return; harder
+   * incoming shots raise it. 0 = a CPU that never misses.
+   */
+  cpuErrorRate?: number;
 }
-const DEFAULT_TUNING: BallTuning = { feedSpeed: 3.2, drag: 0.12, tableRestitution: 0.88, paddleRestitution: 0.86, swingTransfer: 0.65 };
+const DEFAULT_TUNING: BallTuning = { feedSpeed: 3.2, drag: 0.12, tableRestitution: 0.88, paddleRestitution: 0.86, swingTransfer: 0.65, cpuErrorRate: 0 };
+
+export type CpuMistake = 'whiff' | 'net' | 'long' | 'wide';
+// Share of each mistake when one happens.
+const CPU_MISTAKES: Array<[CpuMistake, number]> = [['net', 0.35], ['long', 0.3], ['whiff', 0.2], ['wide', 0.15]];
 
 function initialState(): BallState {
   return {
@@ -128,6 +141,10 @@ export class BallSimulation {
   private previousOpponentBlade: Vec3 | null = null;
   private opponentActive = false;
   private opponentReady = false;
+  /** Mistake planned for the CPU's next return, decided when the player hits. */
+  private cpuMistake: CpuMistake | null = null;
+  /** Injected for deterministic tests. */
+  random: () => number = Math.random;
 
   configure(tuning: BallTuning): void {
     this.tuning = { ...tuning };
@@ -160,6 +177,7 @@ export class BallSimulation {
     this.previousBlade = null;
     this.previousOpponentBlade = null;
     this.opponentReady = false;
+    this.cpuMistake = null;
     this.events = [{ kind: 'launch', side: 'opponent' }];
   }
 
@@ -173,6 +191,7 @@ export class BallSimulation {
     this.previousOpponentBlade = null;
     this.opponentActive = false;
     this.opponentReady = false;
+    this.cpuMistake = null;
     this.opponentPaddle = {
       position: { ...OPPONENT_READY_POSITION }, swing: 0,
       roll: OPPONENT_FOREHAND_ROLL, pitch: OPPONENT_READY_PITCH, yaw: 0, stroke: 'forehand',
@@ -228,17 +247,27 @@ export class BallSimulation {
     // Because the lower drive bounces earlier, it has more distance to keep
     // travelling sideways afterward. Aim the bounce nearer the centre so an
     // angled CPU contact does not become an unreachable post-bounce hook.
-    const targetX = Math.max(-0.14, Math.min(0.14, -s.position.x * 0.12));
+    let targetX = Math.max(-0.14, Math.min(0.14, -s.position.x * 0.12));
     // Physical CPU contact now happens behind the far edge of the table. Use a
     // firmer, shallower drive to an earlier bounce; retaining the old slow
     // speed from this greater distance forced every return into a tall lob.
-    const targetZ = 0.48;
+    let targetZ = 0.48;
+    const mistake = this.cpuMistake;
+    this.cpuMistake = null;
+    if (mistake === 'long') targetZ = TABLE_PHYSICS.length / 2 + 0.3 + this.random() * 0.3;
+    if (mistake === 'wide') targetX = (this.random() < 0.5 ? -1 : 1) * (TABLE_PHYSICS.width / 2 + 0.2 + this.random() * 0.2);
     const returnSpeed = Math.max(3.6, this.tuning.feedSpeed * 1.15);
     const travelTime = Math.max(0.42, Math.min(0.95, (targetZ - s.position.z) / returnSpeed));
     const targetY = TABLE_PHYSICS.height + BALL_RADIUS;
     s.velocity.x = (targetX - s.position.x) / travelTime;
     s.velocity.z = (targetZ - s.position.z) / travelTime;
     s.velocity.y = (targetY - s.position.y - 0.5 * GRAVITY * travelTime ** 2) / travelTime;
+    if (mistake === 'net') {
+      // Aim through the lower half of the net instead of over it.
+      const timeToNet = -s.position.z / s.velocity.z;
+      const netY = TABLE_PHYSICS.height + TABLE_PHYSICS.netHeight * (0.3 + this.random() * 0.4);
+      s.velocity.y = (netY - s.position.y - 0.5 * GRAVITY * timeToNet ** 2) / timeToNet;
+    }
     s.position.z += 0.025;
     s.lastEvent = 'Opponent return';
     this.hitCooldown = 0.08;
@@ -369,6 +398,9 @@ export class BallSimulation {
       }
       if (best) {
         targetBladeX = Math.max(-0.72, Math.min(0.72, best.x));
+        // A planned whiff misreads the ball by more than the blade can cover,
+        // shifted toward the centre so the court edge can't clamp it back.
+        if (this.cpuMistake === 'whiff') targetBladeX += (best.x > 0 ? -1 : 1) * (BLADE_RADIUS + BALL_RADIUS + 0.12);
         targetBladeY = Math.max(OPPONENT_BLADE_MIN_Y, Math.min(OPPONENT_BLADE_MAX_Y, best.y));
         targetZ = best.z;
       }
@@ -482,7 +514,10 @@ export class BallSimulation {
     if (Math.hypot(x - contactBlade.x, y - contactBlade.y) > contactRadius + BALL_RADIUS) return;
 
     s.position = { x, y, z: contactBlade.z - BALL_RADIUS - 0.002 };
-    const minimumReturnSpeed = this.openingReturn ? 3 : 2.2;
+    // Webcam strokes barely move toward the table, so a slow outgoing speed
+    // forced every return into a high lob to reach the far half. A firmer
+    // minimum lets the ball travel flat and low, like a real drive.
+    const minimumReturnSpeed = this.openingReturn ? MIN_OPENING_RETURN_SPEED : MIN_RETURN_SPEED;
     const outgoingZ = -Math.max(minimumReturnSpeed, Math.abs(s.velocity.z) * this.tuning.paddleRestitution + Math.max(0, -paddle.velocity.z) * this.tuning.swingTransfer);
     const faceLift = Math.sin(paddle.pitch) * Math.abs(outgoingZ) * 0.75;
     const faceSide = Math.sin(paddle.yaw) * Math.abs(outgoingZ) * 0.65;
@@ -527,17 +562,43 @@ export class BallSimulation {
     const liftedY = transferredY + Math.max(0, requiredLift - transferredY) * netAssist;
     const deepLandingZ = -(TABLE_PHYSICS.length / 2 - 0.12);
     const timeToDeepBounce = Math.max(0.2, (s.position.z - deepLandingZ) / Math.abs(outgoingZ));
-    const maximumLift = (tableSurface - s.position.y - 0.5 * GRAVITY * timeToDeepBounce ** 2) / timeToDeepBounce;
+    const deepLift = (tableSurface - s.position.y - 0.5 * GRAVITY * timeToDeepBounce ** 2) / timeToDeepBounce;
+    // Also cap how far the ball may clear the net, so returns stay low.
+    const netCapY = TABLE_PHYSICS.height + TABLE_PHYSICS.netHeight + BALL_RADIUS + MAX_NET_CLEARANCE;
+    const netCapLift = (netCapY - s.position.y - 0.5 * GRAVITY * timeToNet ** 2) / timeToNet;
+    const maximumLift = Math.min(deepLift, netCapLift);
     s.velocity = {
       x: (guidedLandingX - s.position.x) / timeToTargetBounce,
-      y: liftedY - Math.max(0, liftedY - Math.max(maximumLift, requiredNetLift)) * netAssist,
+      // The height cap applies in full: even a very hard upward flick stays a
+      // drive rather than becoming a lob.
+      y: Math.min(liftedY, Math.max(maximumLift, requiredNetLift)),
       z: outgoingZ,
     };
     s.paddleHits++;
+    this.cpuMistake = this.planCpuMistake(guidedLandingX, Math.abs(outgoingZ));
     s.lastEvent = `Paddle hit #${s.paddleHits}`;
     this.events.push({ kind: 'paddle-hit', side: 'player', speed: Math.hypot(s.velocity.x, s.velocity.y, s.velocity.z) });
     this.hitCooldown = 0.08;
     this.openingReturn = false;
+  }
+
+  /**
+   * Decide whether the CPU will err on this shot. Fast and wide shots are
+   * harder, so they raise the chance of a mistake.
+   */
+  private planCpuMistake(landingX: number, speedZ: number): CpuMistake | null {
+    const base = Math.max(0, Math.min(1, this.tuning.cpuErrorRate ?? 0));
+    if (base === 0 || !this.opponentActive) return null;
+    const pace = Math.max(0, speedZ - 4) * 0.25;
+    const width = Math.max(0, Math.abs(landingX) - 0.35) * 1.5;
+    const chance = Math.min(0.7, base * (1 + pace + width));
+    if (this.random() >= chance) return null;
+    let roll = this.random();
+    for (const [kind, share] of CPU_MISTAKES) {
+      if (roll < share) return kind;
+      roll -= share;
+    }
+    return 'net';
   }
 
   private collideTable(previous: Vec3): void {

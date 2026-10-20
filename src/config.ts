@@ -61,6 +61,8 @@ export interface Settings {
   tableRestitution: number;
   paddleRestitution: number;
   swingTransfer: number;
+  /** Base chance the CPU makes a mistake on a return (0 = never misses). */
+  cpuErrorRate: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -99,6 +101,7 @@ export const DEFAULT_SETTINGS: Settings = {
   tableRestitution: 0.88,
   paddleRestitution: 0.86,
   swingTransfer: 0.65,
+  cpuErrorRate: 0.12,
 };
 
 /** Assumed real shoulder width, used only to give speeds an approximate m/s reading. */

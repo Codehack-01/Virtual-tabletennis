@@ -172,6 +172,67 @@ describe('BallSimulation', () => {
     expect(bounce?.side).toBe('opponent');
   });
 
+  // Play one exchange: a neutral player return, then follow the CPU's reply
+  // until it lands, nets or leaves play. The random source is scripted.
+  const cpuReply = (rolls: number[], errorRate = 0.12) => {
+    const sim = new BallSimulation();
+    sim.configure({ feedSpeed: 3.2, drag: 0.12, tableRestitution: 0.88, paddleRestitution: 0.86, swingTransfer: 0.65, cpuErrorRate: errorRate });
+    let i = 0;
+    sim.random = () => rolls[Math.min(i++, rolls.length - 1)];
+    sim.setOpponentActive(true);
+    const playerPaddle = { ...paddle, position: { x: 0, y: 1.04, z: 1.5 }, velocity: { x: 0, y: 0.5, z: 0 }, roll: -Math.PI / 2 };
+    const playerBlade = bladeCenter(playerPaddle);
+    sim.state = {
+      position: { x: playerBlade.x, y: playerBlade.y, z: playerBlade.z - 0.01 },
+      velocity: { x: 0, y: -1, z: 3.2 }, status: 'in-play', bounces: 1, paddleHits: 0, lastEvent: '',
+    };
+    sim.step(0.01, playerPaddle, { collision: 0.65, netClearance: 0.4 });
+    const noPaddle = { ...playerPaddle, tracked: false };
+    const kinds: string[] = [];
+    let cpuHit = false;
+    for (let k = 0; k < 2000 && sim.state.status === 'in-play'; k++) {
+      sim.step(1 / 240, noPaddle, { collision: 0.65, netClearance: 0.4 });
+      for (const event of sim.consumeEvents()) {
+        if (event.kind === 'table-bounce' && event.side === 'opponent' && !cpuHit) sim.setOpponentReady(true);
+        if (event.kind === 'opponent-hit') cpuHit = true;
+        else if (cpuHit) kinds.push(event.kind === 'table-bounce' ? `bounce-${event.side}` : event.kind);
+      }
+      if (cpuHit && kinds.length) break;
+    }
+    return { cpuHit, first: kinds[0] };
+  };
+
+  it('returns cleanly when the CPU rolls no mistake', () => {
+    expect(cpuReply([0.99])).toEqual({ cpuHit: true, first: 'bounce-player' });
+  });
+
+  it('never errs when opponent mistakes are off', () => {
+    expect(cpuReply([0], 0)).toEqual({ cpuHit: true, first: 'bounce-player' });
+  });
+
+  // rolls: [chance, kind, ...detail]. Kind shares: net <0.35, long <0.65, whiff <0.85, wide.
+  it.each([
+    ['net', [0, 0.1, 0.5], { cpuHit: true, first: 'net' }],
+    ['long', [0, 0.5, 0.5], { cpuHit: true, first: 'out' }],
+    ['wide', [0, 0.9, 0.2, 0.5], { cpuHit: true, first: 'out' }],
+    ['whiff', [0, 0.7], { cpuHit: false, first: undefined }],
+  ] as const)('makes a %s mistake that costs the CPU the point', (_kind, rolls, expected) => {
+    expect(cpuReply([...rolls])).toEqual(expected);
+  });
+
+  it.each([0.5, 3, 7])('keeps a %s m/s upward stroke low over the net instead of lobbing', (swingY) => {
+    const { sim, noPaddle } = upwardStroke(swingY);
+    let netClearance: number | null = null;
+    for (let i = 0; i < 1000 && netClearance === null && sim.state.status === 'in-play'; i++) {
+      const before = sim.state.position.z;
+      sim.step(1 / 240, noPaddle, { collision: 0.65, netClearance: 0.4 });
+      if (before > 0 && sim.state.position.z <= 0) netClearance = sim.state.position.y - TABLE_PHYSICS.height - TABLE_PHYSICS.netHeight;
+    }
+    expect(netClearance).not.toBeNull();
+    expect(netClearance!).toBeGreaterThan(0.03);
+    expect(netClearance!).toBeLessThan(0.25);
+  });
+
   it.each([3, 5, 7])('lets the CPU reach and return a high, deep ball from a %s m/s upward stroke', (swingY) => {
     const { sim, noPaddle } = upwardStroke(swingY);
     let opponentHit = false;

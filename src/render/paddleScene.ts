@@ -318,12 +318,12 @@ export class PaddleScene {
     fade.height = 64;
     const fadeCtx = fade.getContext('2d')!;
     const gradient = fadeCtx.createLinearGradient(0, 0, 0, 64);
-    // Opaque at the elbow end of the cylinder, transparent at the shoulder end.
-    // Only the stretch nearest the elbow stays solid; the rest fades away
-    // early because, in the ready stance, the upper arm points at the camera.
+    // Opaque at the elbow end of the cylinder. Only a short sleeve stub stays
+    // visible there; the rest of the upper arm fades out quickly so it never
+    // crosses the ball's path.
     gradient.addColorStop(0, '#fff');
-    gradient.addColorStop(0.12, '#fff');
-    gradient.addColorStop(0.7, '#000');
+    gradient.addColorStop(0.04, '#fff');
+    gradient.addColorStop(0.3, '#000');
     gradient.addColorStop(1, '#000');
     fadeCtx.fillStyle = gradient;
     fadeCtx.fillRect(0, 0, 4, 64);

@@ -449,6 +449,7 @@ export class Engine {
       tableRestitution: this.settings.tableRestitution,
       paddleRestitution: this.settings.paddleRestitution,
       swingTransfer: this.settings.swingTransfer,
+      cpuErrorRate: this.settings.cpuErrorRate,
     });
   }
 

@@ -43,6 +43,7 @@ const PADDLE_CONTROL: SliderSpec[] = [
 ];
 
 const PHYSICS: SliderSpec[] = [
+  { key: 'cpuErrorRate', label: 'Opponent mistakes', min: 0, max: 0.4, step: 0.01, help: 'Base chance the opponent misses, nets or hits long on each return. Fast and wide shots raise it. 0 = never misses.' },
   { key: 'feedSpeed', label: 'Opponent shot speed', min: 2.2, max: 5.5, step: 0.1, unit: 'm/s', help: 'Speed of serves and predictable CPU returns.' },
   { key: 'ballDrag', label: 'Air drag', min: 0, max: 0.4, step: 0.01, help: 'Higher values slow the ball more during flight.' },
   { key: 'tableRestitution', label: 'Table bounce', min: 0.5, max: 1, step: 0.01, help: 'Vertical speed retained after a table bounce.' },
@@ -57,9 +58,9 @@ const PRESETS: Record<string, Partial<Settings>> = {
 };
 
 const DIFFICULTY: Record<string, Partial<Settings>> = {
-  Easy: { feedSpeed: 2.7, collisionAssist: 0.9, netClearanceAssist: 0.75, ballDrag: 0.15, tableRestitution: 0.84, paddleRestitution: 0.8, swingTransfer: 0.55 },
-  Balanced: { feedSpeed: 3.2, collisionAssist: 0.65, netClearanceAssist: 0.4, ballDrag: 0.12, tableRestitution: 0.88, paddleRestitution: 0.86, swingTransfer: 0.65 },
-  Realistic: { feedSpeed: 4.2, collisionAssist: 0.2, netClearanceAssist: 0.05, ballDrag: 0.08, tableRestitution: 0.9, paddleRestitution: 0.92, swingTransfer: 0.85 },
+  Easy: { cpuErrorRate: 0.22, feedSpeed: 2.7, collisionAssist: 0.9, netClearanceAssist: 0.75, ballDrag: 0.15, tableRestitution: 0.84, paddleRestitution: 0.8, swingTransfer: 0.55 },
+  Balanced: { cpuErrorRate: 0.12, feedSpeed: 3.2, collisionAssist: 0.65, netClearanceAssist: 0.4, ballDrag: 0.12, tableRestitution: 0.88, paddleRestitution: 0.86, swingTransfer: 0.65 },
+  Realistic: { cpuErrorRate: 0.06, feedSpeed: 4.2, collisionAssist: 0.2, netClearanceAssist: 0.05, ballDrag: 0.08, tableRestitution: 0.9, paddleRestitution: 0.92, swingTransfer: 0.85 },
 };
 
 interface Props {

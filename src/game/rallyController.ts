@@ -108,7 +108,8 @@ export class RallyController {
       else if (event.kind === 'opponent-hit') this.onOpponentHit(ball);
       else if (event.kind === 'net') {
         if (this.snapshot.phase === 'opponent-turn') this.snapshot.stats.netFaults++;
-        this.award(now, this.snapshot.phase === 'opponent-turn' ? 'opponent' : 'player', 'Net fault');
+        const playerShot = this.snapshot.phase === 'opponent-turn';
+        this.award(now, playerShot ? 'opponent' : 'player', playerShot ? 'Your shot hit the net' : 'Opponent hit the net');
       }
       else if (event.kind === 'out') this.onOut(now);
       if (this.pointHasEnded()) break;
@@ -210,7 +211,8 @@ export class RallyController {
       this.award(now, this.opponentBounces > 0 ? 'player' : 'opponent', this.opponentBounces > 0 ? 'Opponent missed' : 'Your return went long');
     } else {
       if (this.playerBounces > 0) this.snapshot.stats.misses++;
-      this.award(now, this.playerBounces > 0 ? 'opponent' : 'player', this.playerBounces > 0 ? 'Missed return' : 'Opponent serve went out');
+      const opponentFault = this.snapshot.rallyHits > 0 ? 'Opponent hit out' : 'Opponent serve went out';
+      this.award(now, this.playerBounces > 0 ? 'opponent' : 'player', this.playerBounces > 0 ? 'Missed return' : opponentFault);
     }
   }
 
