@@ -96,3 +96,37 @@ export function computeRange(samples: Vec3[], neutral: Vec3, fallback: Calibrati
   const zFwd = Math.max(MIN_RANGE, percentile(zVals, 0.97) - neutral.z);
   return { range: { left, right, down, up, back: zBack, forward: zFwd }, warnings };
 }
+
+/** Fraction of the camera picture kept clear at each edge (see fitRangeToFrame). */
+export const FRAME_EDGE_MARGIN = 0.12;
+const MIN_FITTED_RANGE = 0.08;
+
+/**
+ * Tracking is worst at the edge of the camera picture: the hand (and paddle) is
+ * partly cut off, landmarks guess and jump, and it's easy to leave the frame.
+ * Shrink each side's range, if needed, so the paddle's full reach (normalized
+ * `limit`) is reached with the wrist still `margin` inside the picture. Wherever
+ * the player stands, the ends of the paddle zone never need the frame edge, and
+ * the unreliable edge strip only ever maps onto the clamped end of the reach.
+ */
+export function fitRangeToFrame(
+  cal: Calibration,
+  view: { aspect: number; reference: { x: number; y: number } },
+  limit = 1.15,
+  margin = FRAME_EDGE_MARGIN,
+): Calibration['range'] {
+  const leftEdge = (margin - view.reference.x) * view.aspect;
+  const rightEdge = (1 - margin - view.reference.x) * view.aspect;
+  const topEdge = view.reference.y - margin;
+  const bottomEdge = view.reference.y - (1 - margin);
+  const fit = (configured: number, available: number) =>
+    Math.max(MIN_FITTED_RANGE, Math.min(configured, available / limit));
+  const { neutral, range } = cal;
+  return {
+    ...range,
+    left: fit(range.left, neutral.x - leftEdge),
+    right: fit(range.right, rightEdge - neutral.x),
+    up: fit(range.up, topEdge - neutral.y),
+    down: fit(range.down, neutral.y - bottomEdge),
+  };
+}

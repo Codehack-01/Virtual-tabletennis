@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS } from '../config';
 import { BLADE_RADIUS, TABLE_PHYSICS, bladeCenter } from '../physics/ballPhysics';
 import { MotionEstimator } from '../motion/motionEstimator';
-import { defaultCalibration } from './calibration';
+import { defaultCalibration, fitRangeToFrame } from './calibration';
 import { ARM_RIG, PADDLE_AREA, PaddleController, solveElbow } from './paddleController';
 
 function trackedMotion(x: number) {
@@ -143,8 +143,22 @@ describe('PaddleController handed orientation', () => {
   it('does not add anatomical gain after a measured range calibration', () => {
     const controller = new PaddleController();
     const cal = { ...defaultCalibration('camera'), rangeSet: true };
-    const pose = controller.update(trackedMotion(0.2), cal, DEFAULT_SETTINGS, 100);
-    expect(pose.normalized.x).toBeCloseTo((0.2 / 0.45) * DEFAULT_SETTINGS.gain);
+    const motion = trackedMotion(0.2);
+    const pose = controller.update(motion, cal, DEFAULT_SETTINGS, 100);
+    // The only adjustment is keeping the reach inside the camera picture.
+    expect(pose.normalized.x).toBeCloseTo((0.2 / fitRangeToFrame(cal, motion).right) * DEFAULT_SETTINGS.gain);
+  });
+
+  it('reaches the end of the paddle zone with the hand still inside the camera picture', () => {
+    // Ready hand right of centre (image x ≈ 0.65), as a right-hander stands.
+    const cal = { ...defaultCalibration('camera'), neutral: { x: 0.2, y: 0, z: 0 }, neutralSet: true };
+    // Hand at image x 0.88: still 12% inside the picture, clear of the
+    // unreliable edge strip, yet already at the paddle's full reach.
+    const atRight = trackedMotion((0.88 - 0.5) * (4 / 3));
+    const right = new PaddleController().update(atRight, cal, DEFAULT_SETTINGS, 100);
+    expect(right.normalized.x).toBeGreaterThan(1.14);
+    // The other side keeps its full configured reach where the picture allows it.
+    expect(fitRangeToFrame(cal, atRight).left).toBeCloseTo(cal.range.left);
   });
 
   it('attaches a proportionate rendered arm to the paddle grip', () => {

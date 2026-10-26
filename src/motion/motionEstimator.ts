@@ -81,6 +81,12 @@ export interface TrackingStats {
 }
 
 const REACQUIRE_RESET_MS = 150;
+// A wrist last seen this close to the edge of the picture (fraction of width or
+// height) most likely went out of frame on a wide reach. While the body is
+// still visible, hold the paddle there instead of declaring tracking lost
+// after `holdMs`, which made the paddle and arm vanish at the ends.
+const FRAME_EDGE_ZONE = 0.15;
+const EDGE_HOLD_MS = 1500;
 const STILL_SPEED = 0.15; // image heights/s
 const ARM_JOINT_MIN_VISIBILITY = 0.55;
 
@@ -119,6 +125,7 @@ export class MotionEstimator {
   private lossStart = 0;
   private lastArmRelative: TimedSample | null = null;
   private previousVelocity: Vec3 | null = null;
+  private lastWristImage: { x: number; y: number } | null = null;
 
   state: MotionState = MotionEstimator.initialState();
   stats: TrackingStats = { framesTotal: 0, framesAccepted: 0, outliersRejected: 0, lossEvents: 0, currentLossMs: 0, longestLossMs: 0 };
@@ -171,6 +178,7 @@ export class MotionEstimator {
     this.lastAccepted = null;
     this.lastArmRelative = null;
     this.previousVelocity = null;
+    this.lastWristImage = null;
     this.consecutiveOutliers = 0;
     this.everSeen = false;
     this.refKnown = false;
@@ -325,6 +333,7 @@ export class MotionEstimator {
       s.lastSeen = t;
       s.status = 'tracking';
       s.acceptedThisFrame = true;
+      this.lastWristImage = { x: obs.wrist!.x, y: obs.wrist!.y };
       this.lastAccepted = { t, p: raw };
 
       this.history.push({ t, p: raw });
@@ -412,7 +421,11 @@ export class MotionEstimator {
         }
         const lostFor = t - s.lastSeen;
         this.stats.currentLossMs = lostFor;
-        s.status = lostFor <= settings.holdMs ? 'holding' : 'lost';
+        const w = this.lastWristImage;
+        const leftAtEdge = w !== null && (w.x < FRAME_EDGE_ZONE || w.x > 1 - FRAME_EDGE_ZONE
+          || w.y < FRAME_EDGE_ZONE || w.y > 1 - FRAME_EDGE_ZONE);
+        const holdLimit = leftAtEdge && shouldersOk ? Math.max(settings.holdMs, EDGE_HOLD_MS) : settings.holdMs;
+        s.status = lostFor <= holdLimit ? 'holding' : 'lost';
       }
       // No fresh data → no motion. Stale velocity would cause phantom swings later.
       s.velocity = { ...ZERO };

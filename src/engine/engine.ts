@@ -1,6 +1,7 @@
 import { ASSUMED_SHOULDER_WIDTH_M, type Settings } from '../config';
 import {
   computeNeutral,
+  fitRangeToFrame,
   computeRange,
   defaultCalibration,
   type Calibration,
@@ -102,6 +103,12 @@ export class Engine {
   private tracker: PoseTracker | null = null;
   private trackerLoading = false;
   private trackerDescription = '';
+  // The accurate (full) pose model costs roughly twice the lite one. If this
+  // device can't run it inside the camera's frame budget, fall back to lite for
+  // the session without changing the player's saved setting.
+  private modelOverride: Settings['model'] | null = null;
+  private trackerReadyAt = 0;
+  private lastSpeedCheck = 0;
   private warnings: string[] = [];
   private estimator = new MotionEstimator();
   private swingDetector = new SwingDetector();
@@ -216,12 +223,16 @@ export class Engine {
   private async loadTracker(): Promise<void> {
     this.trackerLoading = true;
     try {
-      const { tracker, warnings } = await createPoseTracker(this.settings.model, this.settings.delegate);
+      const { tracker, warnings } = await createPoseTracker(this.modelOverride ?? this.settings.model, this.settings.delegate);
       if (this.disposed) return tracker.close();
       this.tracker?.close();
       this.tracker = tracker;
       this.trackerDescription = tracker.description;
-      this.warnings = warnings;
+      this.warnings = this.modelOverride
+        ? [...warnings, 'This device is too slow for the accurate tracking model, so the faster one is in use; tracking will be less steady.']
+        : warnings;
+      this.trackerReadyAt = performance.now();
+      this.inference.clear();
     } catch (err) {
       this.fail('model', err);
     } finally {
@@ -283,6 +294,7 @@ export class Engine {
       // Redraw now: the render loop only runs once the camera is on.
       if (this.phase !== 'running') this.scene.render(this.paddlePose, this.ball.state, this.rally.state, this.ball.opponentPaddle);
     }
+    if (prev.model !== next.model) this.modelOverride = null;
     if ((prev.model !== next.model || prev.delegate !== next.delegate) && this.phase === 'running') {
       void this.reloadTracker();
     }
@@ -469,6 +481,7 @@ export class Engine {
     const done = performance.now();
     this.processedFrames.push(done);
     this.inference.push(done, frame.inferenceMs);
+    this.checkTrackerSpeed(done);
     if (captureTime && captureTime > 0 && done - captureTime < 1000 && done > captureTime) {
       this.captureLatency.push(done, done - captureTime);
     }
@@ -505,8 +518,22 @@ export class Engine {
         mirror: s.mirror,
         minVisibility: s.minVisibility,
         estimator: this.estimator,
-        calibration: this.calibration,
+        // Show the reach the paddle actually uses (kept inside the picture).
+        calibration: { ...this.calibration, range: fitRangeToFrame(this.calibration, this.estimator.state) },
       });
+    }
+  }
+
+  private checkTrackerSpeed(now: number): void {
+    const usingFull = (this.modelOverride ?? this.settings.model) === 'full';
+    if (!usingFull || now - this.lastSpeedCheck < 1000) return;
+    this.lastSpeedCheck = now;
+    // Give the model a few seconds to warm up before judging it.
+    if (now - this.trackerReadyAt < 4000) return;
+    // Over ~30 ms the tracker can't keep up with a 30 fps camera.
+    if (this.inference.percentile(now, 0.95) > 30) {
+      this.modelOverride = 'lite';
+      void this.reloadTracker();
     }
   }
 

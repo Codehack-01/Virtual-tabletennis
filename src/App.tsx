@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { DEFAULT_SETTINGS, loadJSON, saveJSON, type ReferenceFrame, type Settings } from './config';
+import { loadJSON, loadSettings, saveJSON, saveSettings, type ReferenceFrame, type Settings } from './config';
 import { defaultCalibration, type Calibration } from './control/calibration';
 import { Engine, type EngineSnapshot } from './engine/engine';
 import { checkCameraSupport, listCameras } from './tracking/camera';
@@ -16,7 +16,10 @@ import './ui/game.css';
 
 // v5 restores the low-latency gameplay profile and discards the conservative
 // control values that made the paddle trail the player's wrist.
-const SETTINGS_KEY = 'ttpoc.settings.v5';
+// v6 stores only the settings the player changed (see saveSettings); v5 stored
+// the full object and is migrated once.
+const SETTINGS_KEY = 'ttpoc.settings.v6';
+const LEGACY_SETTINGS_KEY = 'ttpoc.settings.v5';
 // v5 stores stable raw face/torso medians instead of a first-frame ratio.
 const CALIBRATION_KEY = 'ttpoc.calibration.v5';
 // Fast enough that score animations land with the point sound.
@@ -94,7 +97,7 @@ export default function App() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const sceneRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
-  const [settings, setSettings] = useState<Settings>(() => loadJSON(SETTINGS_KEY, DEFAULT_SETTINGS));
+  const [settings, setSettings] = useState<Settings>(() => loadSettings(SETTINGS_KEY, LEGACY_SETTINGS_KEY));
   const [snap, setSnap] = useState<EngineSnapshot | null>(null);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [problems] = useState(preflightProblems);
@@ -147,7 +150,7 @@ export default function App() {
   const updateSettings = (patch: Partial<Settings>) => {
     const next = { ...settings, ...patch };
     setSettings(next);
-    saveJSON(SETTINGS_KEY, next);
+    saveSettings(SETTINGS_KEY, next);
     engineRef.current?.updateSettings(next);
   };
 

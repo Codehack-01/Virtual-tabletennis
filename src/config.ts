@@ -69,9 +69,10 @@ export const DEFAULT_SETTINGS: Settings = {
   hand: 'right',
   mirror: true,
   frame: 'camera',
-  // Keep inference inside a 30 fps camera frame budget. The avatar arm has its
-  // own visual filtering; paddle control benefits more from the lower latency.
-  model: 'lite',
+  // On a real player's footage (hand low near the frame edge) the lite model
+  // teleported the wrist up to 385 px between frames; full held it within
+  // ~27 px. The engine drops back to lite on devices too slow for full.
+  model: 'full',
   delegate: 'GPU',
   // A bent ready arm puts the wrist close to the torso, where BlazePose reports
   // lower confidence than it does for an extended arm.
@@ -122,4 +123,43 @@ export function saveJSON(key: string, value: unknown): void {
   } catch {
     // Storage unavailable (private mode etc.) — settings just won't persist.
   }
+}
+
+/** Preferences a player sets on purpose, carried over from pre-v6 storage. */
+const CARRIED_PREFERENCES: (keyof Settings)[] = ['hand', 'mirror', 'environment', 'showOverlay'];
+
+/**
+ * Settings are stored as only the values the player changed. Everything else
+ * follows DEFAULT_SETTINGS, so tuning improvements in the code reach players
+ * who have touched any setting (previously the whole object was saved, which
+ * froze every value at whatever the defaults were that day).
+ */
+export function loadSettings(key: string, legacyKey?: string): Settings {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const legacy = legacyKey ? localStorage.getItem(legacyKey) : null;
+    if (legacy) {
+      // One-time migration: keep deliberate preferences, reset old tuning.
+      const old = JSON.parse(legacy) as Partial<Settings>;
+      const carried: Partial<Settings> = {};
+      for (const name of CARRIED_PREFERENCES) {
+        if (old[name] !== undefined) (carried as Record<string, unknown>)[name] = old[name];
+      }
+      const settings = { ...DEFAULT_SETTINGS, ...carried };
+      saveSettings(key, settings);
+      return settings;
+    }
+  } catch {
+    // Unreadable storage: fall through to defaults.
+  }
+  return { ...DEFAULT_SETTINGS };
+}
+
+export function saveSettings(key: string, settings: Settings): void {
+  const changed: Partial<Settings> = {};
+  for (const name of Object.keys(settings) as (keyof Settings)[]) {
+    if (settings[name] !== DEFAULT_SETTINGS[name]) (changed as Record<string, unknown>)[name] = settings[name];
+  }
+  saveJSON(key, changed);
 }

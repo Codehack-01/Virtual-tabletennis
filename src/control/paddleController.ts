@@ -2,7 +2,7 @@ import type { Settings } from '../config';
 import type { MotionState, TrackingStatus } from '../motion/motionEstimator';
 import { ZERO, type Vec3 } from '../motion/vector';
 import { BLADE_RADIUS, GRIP_TO_BLADE, TABLE_PHYSICS } from '../physics/ballPhysics';
-import { normalize, type Calibration } from './calibration';
+import { fitRangeToFrame, normalize, type Calibration } from './calibration';
 
 /**
  * The volume the paddle grip can move in, in world metres. Table is centred at the
@@ -94,6 +94,10 @@ const REST_SMOOTH_MS = 90;
 const MOVING_SMOOTH_MS = 18;
 const REST_RELEASE_START = 0.25;
 const REST_RELEASE_FULL = 0.9;
+// Near the edge of the camera picture the hand is partly cut off and the
+// tracker partly guesses. There, hold a still paddle harder and need a clearer
+// movement before releasing it; strokes through the edge still pass.
+export const EDGE_STEADY = { zoneStart: 0.82, zoneFull: 0.95, extraSmoothMs: 140, releaseScale: 1.8 };
 // Above the mapped speed of an ordinary stroke: this clips tracker teleports
 // and abrupt prediction corrections without flattening intentional motion.
 const MAX_RENDER_SPEED_MPS = 8;
@@ -158,6 +162,8 @@ export class PaddleController {
     // whole mapping at once; glide there instead of snapping across the court.
     if (this.lastCalibration && cal !== this.lastCalibration) this.recalibrationBlendUntil = now + RECALIBRATION_BLEND_MS * 4;
     this.lastCalibration = cal;
+    // Reach that never needs the hand at the edge of the camera picture.
+    const fitted: Calibration = { ...cal, range: fitRangeToFrame(cal, motion) };
 
     const p = this.pose;
     const tracked = motion.status === 'tracking' || motion.status === 'holding';
@@ -236,7 +242,7 @@ export class PaddleController {
         y: responsivePosition.y + motion.velocity.y * lead + motion.frameVelocity.y * sinceFrame,
         z: responsivePosition.z + motion.velocity.z * lead,
       };
-      const n = normalize(predicted, cal, settings.gain);
+      const n = normalize(predicted, fitted, settings.gain);
       // Keep the uncalibrated mapping linear. The previous position-dependent
       // outward gain made equal hand movements produce visibly different avatar
       // speeds. A range calibration is the honest way to learn asymmetric reach.
@@ -259,7 +265,11 @@ export class PaddleController {
         // Bridge camera-rate landmark updates at render rate without adding
         // enough latency to make a return feel detached from the hand. While
         // the hand is still, smooth harder so noise doesn't twitch the arm.
-        const restTarget = tracking ? 1 - smoothstep(REST_RELEASE_START, REST_RELEASE_FULL, activitySpeed) : 1;
+        const edge = edgeProximity(motion);
+        const releaseScale = 1 + (EDGE_STEADY.releaseScale - 1) * edge;
+        const restTarget = tracking
+          ? 1 - smoothstep(REST_RELEASE_START * releaseScale, REST_RELEASE_FULL * releaseScale, activitySpeed)
+          : 1;
         this.restBlend = firstUpdate
           ? restTarget
           : smoothScalar(this.restBlend, restTarget, dt, restTarget < this.restBlend ? 5 : 80);
@@ -267,12 +277,12 @@ export class PaddleController {
           p.position,
           target,
           dt,
-          MOVING_SMOOTH_MS + REST_SMOOTH_MS * this.restBlend,
+          MOVING_SMOOTH_MS + (REST_SMOOTH_MS + EDGE_STEADY.extraSmoothMs * edge) * this.restBlend,
           MAX_RENDER_SPEED_MPS,
         );
       }
       const { half } = PADDLE_AREA;
-      const { range } = cal;
+      const { range } = fitted;
       const scale = (r1: number, r2: number) => settings.gain / ((r1 + r2) / 2);
       p.velocity = {
         x: motion.velocity.x * scale(range.left, range.right) * half.x,
@@ -316,7 +326,7 @@ export class PaddleController {
         p.yaw = 0;
       }
       constrainPaddleAboveTable(p);
-      p.arm = this.solveArm(motion, cal, settings, dt, firstUpdate);
+      p.arm = this.solveArm(motion, fitted, settings, dt, firstUpdate);
     } else {
       // Tracking loss must never steer the paddle. Keep its last position and
       // make it non-collidable via `tracked = false`; reacquisition blends from
@@ -520,6 +530,14 @@ function normalize3(v: Vec3): Vec3 {
 
 function clampAngle(value: number, limit: number): number {
   return Math.max(-limit, Math.min(limit, value));
+}
+
+/** 0 in the middle of the camera picture, rising to 1 at its edge (filtered wrist). */
+function edgeProximity(motion: MotionState): number {
+  const x = motion.reference.x + motion.position.x / motion.aspect;
+  const y = motion.reference.y - motion.position.y;
+  const fromCentre = Math.max(Math.abs(x - 0.5), Math.abs(y - 0.5)) * 2;
+  return smoothstep(EDGE_STEADY.zoneStart, EDGE_STEADY.zoneFull, fromCentre);
 }
 
 /** Zero inside ±width, then linear so that ±1 still maps to ±1. */

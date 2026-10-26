@@ -80,6 +80,27 @@ function obs(t: number, wrist: Landmark | null): ArmObservation {
 }
 
 describe('MotionEstimator', () => {
+  it('holds the paddle when the hand leaves the picture at the side', () => {
+    const settings = { ...DEFAULT_SETTINGS, holdMs: 250 };
+    const m = new MotionEstimator();
+    let t = 0;
+    for (let i = 0; i < 6; i++, t += FRAME_MS) m.update(obs(t, lm(0.93, 0.55)), settings);
+    // Hand goes out of frame; body (shoulders) still clearly visible.
+    for (; t < 1000; t += FRAME_MS) m.update(obs(t, lm(1.05, 0.55, 0.05)), settings);
+    expect(m.state.status).toBe('holding');
+    for (; t < 2000; t += FRAME_MS) m.update(obs(t, lm(1.05, 0.55, 0.05)), settings);
+    expect(m.state.status).toBe('lost');
+  });
+
+  it('still reports a loss promptly when the hand vanishes mid-picture', () => {
+    const settings = { ...DEFAULT_SETTINGS, holdMs: 250 };
+    const m = new MotionEstimator();
+    let t = 0;
+    for (let i = 0; i < 6; i++, t += FRAME_MS) m.update(obs(t, lm(0.5, 0.55)), settings);
+    for (; t < 500; t += FRAME_MS) m.update(obs(t, null), settings);
+    expect(m.state.status).toBe('lost');
+  });
+
   const settings: Settings = { ...DEFAULT_SETTINGS, holdMs: 200 };
 
   it('converts to control space: x right, y up, origin at image centre', () => {
