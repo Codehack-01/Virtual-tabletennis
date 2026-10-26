@@ -81,6 +81,20 @@ export interface TrackingStats {
 }
 
 const REACQUIRE_RESET_MS = 150;
+// A wrist that jumps faster than this (frame heights/s) without matching the
+// hand's current motion is suspect: with a paddle in front of the body the
+// tracker can put the wrist at chest height for 2–3 frames while the hand is
+// at the waist. Real movement keeps travelling in the direction it jumped; a
+// glitch sits still at the wrong spot or snaps back. Suspect positions are held
+// until they keep moving onward, or for at most SPIKE_MAX_HOLD frames.
+const SPIKE_SPEED = 2.5;
+const SPIKE_MOTION_MIN = 0.8;
+const SPIKE_MAX_HOLD = 3;
+// Even in the motion's direction, a hand can't gain this much speed (frame
+// heights/s) between two camera frames (~100 m/s² for a typical framing). On
+// real footage the tracker briefly took the paddle for the hand: 1 → 7 fh/s in
+// one frame, in the direction the hand was already drifting.
+const SPIKE_ACCEL_STEP = 3.5;
 // A wrist last seen this close to the edge of the picture (fraction of width or
 // height) most likely went out of frame on a wide reach. While the body is
 // still visible, hold the paddle there instead of declaring tracking lost
@@ -120,6 +134,7 @@ export class MotionEstimator {
   private history: TimedSample[] = [];
   private lastAccepted: TimedSample | null = null;
   private consecutiveOutliers = 0;
+  private spike: { count: number; first: { x: number; y: number } } | null = null;
   private everSeen = false;
   private refKnown = false;
   private lossStart = 0;
@@ -180,6 +195,7 @@ export class MotionEstimator {
     this.previousVelocity = null;
     this.lastWristImage = null;
     this.consecutiveOutliers = 0;
+    this.spike = null;
     this.everSeen = false;
     this.refKnown = false;
     this.state = MotionEstimator.initialState();
@@ -297,12 +313,40 @@ export class MotionEstimator {
           this.consecutiveOutliers++;
           this.stats.outliersRejected++;
           accepted = false;
+        } else if (jumpSpeed > SPIKE_SPEED) {
+          // Real strokes move consistently: the jump lines up with the motion
+          // already under way. A jump out of a still or opposite-moving hand
+          // is suspect until it proves itself.
+          const jx = raw.x - last.p.x;
+          const jy = raw.y - last.p.y;
+          const v = s.velocity;
+          const speedNow = Math.hypot(v.x, v.y);
+          const alignment = speedNow > 1e-6 ? (jx * v.x + jy * v.y) / (Math.hypot(jx, jy) * speedNow) : -1;
+          const implausibleAcceleration = jumpSpeed - speedNow > SPIKE_ACCEL_STEP;
+          if (speedNow < SPIKE_MOTION_MIN || alignment < 0.5 || implausibleAcceleration) {
+            const spike = this.spike;
+            if (!spike) {
+              this.spike = { count: 1, first: { x: raw.x, y: raw.y } };
+              accepted = false;
+            } else {
+              spike.count++;
+              // Still travelling onward from where it jumped to: real motion.
+              const ax = spike.first.x - last.p.x;
+              const ay = spike.first.y - last.p.y;
+              const bx = raw.x - spike.first.x;
+              const by = raw.y - spike.first.y;
+              const continuing = ax * bx + ay * by > 0 && Math.hypot(bx, by) > 0.25 * Math.hypot(ax, ay);
+              if (!continuing && spike.count <= SPIKE_MAX_HOLD) accepted = false;
+            }
+            if (!accepted) this.stats.outliersRejected++;
+          }
         }
       }
     }
 
     if (accepted) {
       this.consecutiveOutliers = 0;
+      this.spike = null;
       const gap = t - s.lastSeen;
       if (!this.everSeen || (prevStatus !== 'tracking' && gap > REACQUIRE_RESET_MS)) {
         // Don't smooth across a gap: the old filter state is stale.

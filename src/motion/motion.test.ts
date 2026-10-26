@@ -213,11 +213,25 @@ describe('MotionEstimator', () => {
     expect(m.update(obs(t, lm(0.5, 0.5)), settings).acceptedThisFrame).toBe(true);
     t += FRAME_MS;
     expect(m.stats.outliersRejected).toBe(1);
-    m.update(obs(t, lm(1.0, 0.5)), settings);
+    // A teleport that then sits still is held a few frames (it might be the
+    // tracker mistaking the paddle for the hand), but is accepted if it persists.
+    let framesUntilAccepted = 0;
+    while (!m.update(obs(t, lm(1.0, 0.5)), settings).acceptedThisFrame && framesUntilAccepted < 20) {
+      t += FRAME_MS;
+      framesUntilAccepted++;
+    }
+    expect(framesUntilAccepted).toBeLessThanOrEqual(6);
+  });
+
+  it('ignores a one-frame wrist jump even when the hand was already drifting that way', () => {
+    // Real footage: hand drifting slowly upward, then the tracker puts the wrist
+    // at chest height for one frame (1 → 7 frame-heights/s in 1/30 s).
+    const m = new MotionEstimator();
+    let t = 0;
+    for (let i = 0; i < 8; i++, t += FRAME_MS) m.update(obs(t, lm(0.5, 0.95 - i * 0.008)), settings);
+    expect(m.update(obs(t, lm(0.5, 0.67)), settings).acceptedThisFrame).toBe(false);
     t += FRAME_MS;
-    m.update(obs(t, lm(1.0, 0.5)), settings);
-    t += FRAME_MS;
-    expect(m.update(obs(t, lm(1.0, 0.5)), settings).acceptedThisFrame).toBe(true);
+    expect(m.update(obs(t, lm(0.5, 0.88)), settings).acceptedThisFrame).toBe(true);
   });
 
   it('reports direction and zero velocity once tracking is lost', () => {

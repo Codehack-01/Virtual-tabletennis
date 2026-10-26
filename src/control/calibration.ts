@@ -99,7 +99,7 @@ export function computeRange(samples: Vec3[], neutral: Vec3, fallback: Calibrati
 
 /** Fraction of the camera picture kept clear at each edge (see fitRangeToFrame). */
 export const FRAME_EDGE_MARGIN = 0.12;
-const MIN_FITTED_RANGE = 0.08;
+const MIN_FITTED_RANGE = 0.2;
 
 /**
  * Tracking is worst at the edge of the camera picture: the hand (and paddle) is

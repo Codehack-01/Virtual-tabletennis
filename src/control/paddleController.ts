@@ -53,8 +53,19 @@ const LATERAL_LEAD_S = 0.025;
 // Backhand entry/exit, measured as how far the hand crosses inside the elbow
 // (frame heights). The gap between them stops noise near a neutral ready stance
 // flipping the blade between forehand and backhand.
-const BACKHAND_ENTER = 0.07;
-const BACKHAND_EXIT = 0.03;
+// Measured on real play: a paddle held in front of the waist sits at a cross of
+// 0.07–0.10, so the old 0.07/0.03 pair flipped the blade 32 times in 37 s.
+const BACKHAND_ENTER = 0.11;
+const BACKHAND_EXIT = 0.05;
+// Reach-based backhand (normalized paddle x on the backhand side), also latched:
+// a gradual position-based blend left the blade half-turned mid-sweep.
+const REACH_BACKHAND_ENTER = 0.65;
+const REACH_BACKHAND_EXIT = 0.4;
+// The new side must hold this long (≈2 camera frames) before the blade turns,
+// so a landmark that flickers for one frame can't flip it.
+const BACKHAND_CONFIRM_MS = 50;
+// Turn-over time: a readable rotation rather than a one-frame pop.
+const BACKHAND_TURN_MS = 45;
 
 /** Normalized depth change ignored by default (≈4× the filtered depth noise). */
 const DEPTH_DEADBAND = 0.35;
@@ -142,6 +153,9 @@ export class PaddleController {
   private elbowBend: Vec3 | null = null;
   private armReach: number | null = null;
   private backhandLatched = false;
+  private reachBackhandLatched = false;
+  private backhandSide = false;
+  private backhandCandidateSince = 0;
   private backhandBlend = 0;
   private rawWristBlend = 0;
   private glideBlend = 0;
@@ -293,11 +307,11 @@ export class PaddleController {
       // (low latency), otherwise the last filtered offsets.
       const intentRigOffsets = motion.rawArmOffsets ?? motion.armOffsets;
       // The blade extends outward from the tracked grip in the normal ready
-      // stance. During a cross-body reach it turns over progressively so its
-      // contact surface leads toward the opposite edge.
-      const reachBackhand = settings.hand === 'right'
-        ? smoothstep(-0.2, -0.72, n.x)
-        : smoothstep(0.2, 0.72, n.x);
+      // stance. On a far cross-body reach it turns over so its contact surface
+      // leads toward the opposite edge.
+      const acrossBody = settings.hand === 'right' ? -n.x : n.x;
+      if (!this.reachBackhandLatched && acrossBody > REACH_BACKHAND_ENTER) this.reachBackhandLatched = true;
+      else if (this.reachBackhandLatched && acrossBody < REACH_BACKHAND_EXIT) this.reachBackhandLatched = false;
       // A real backhand is defined by the hand crossing inside the elbow, not
       // only by where the hand lands on screen. This remains valid after the
       // player steps back or rotates their torso and lets a compact backhand
@@ -307,10 +321,22 @@ export class PaddleController {
         if (!this.backhandLatched && elbowCross > BACKHAND_ENTER) this.backhandLatched = true;
         else if (this.backhandLatched && elbowCross < BACKHAND_EXIT) this.backhandLatched = false;
       }
-      const targetBackhand = Math.max(reachBackhand, this.backhandLatched ? 1 : 0);
+      const wantsBackhand = this.backhandLatched || this.reachBackhandLatched;
+      if (firstUpdate) {
+        this.backhandSide = wantsBackhand;
+      } else if (wantsBackhand !== this.backhandSide) {
+        if (!this.backhandCandidateSince) this.backhandCandidateSince = now;
+        if (now - this.backhandCandidateSince >= BACKHAND_CONFIRM_MS) {
+          this.backhandSide = wantsBackhand;
+          this.backhandCandidateSince = 0;
+        }
+      } else {
+        this.backhandCandidateSince = 0;
+      }
+      const targetBackhand = this.backhandSide ? 1 : 0;
       this.backhandBlend = firstUpdate
         ? targetBackhand
-        : smoothScalar(this.backhandBlend, targetBackhand, dt, targetBackhand > this.backhandBlend ? 14 : 70);
+        : smoothScalar(this.backhandBlend, targetBackhand, dt, BACKHAND_TURN_MS);
       const outwardRoll = settings.hand === 'right' ? -Math.PI / 2 : Math.PI / 2;
       const readyRoll = outwardRoll + (settings.hand === 'right' ? Math.PI : -Math.PI) * this.backhandBlend;
       const forearmAdjustment = settings.rollEnabled && motion.forearmAngle !== null

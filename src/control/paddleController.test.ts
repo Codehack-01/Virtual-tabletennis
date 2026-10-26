@@ -321,6 +321,21 @@ describe('PaddleController handed orientation', () => {
     expect(pose.playerRetreat).toBe(0);
   });
 
+  it('does not flip the blade while the hand hovers near the elbow line', () => {
+    // A paddle held in front of the waist: the hand wobbles 0.07–0.10 inside
+    // the elbow, flickering frame to frame. The blade must stay on one side.
+    const controller = new PaddleController();
+    const rolls: number[] = [];
+    for (let i = 0; i < 60; i++) {
+      const motion = trackedMotion(-0.1);
+      const cross = i % 2 ? 0.1 : 0.07;
+      motion.armOffsets = { elbow: { x: cross, y: -0.04, z: 0 }, shoulder: { x: -0.05, y: 0.2, z: 0 } };
+      motion.rawArmOffsets = motion.armOffsets;
+      rolls.push(controller.update(motion, defaultCalibration('camera'), DEFAULT_SETTINGS, 100 + i * 16).roll);
+    }
+    expect(Math.max(...rolls) - Math.min(...rolls)).toBeLessThan(0.05);
+  });
+
   it('recognizes a compact backhand when the hand crosses inside the elbow', () => {
     const controller = new PaddleController();
     const motion = trackedMotion(0);
@@ -348,7 +363,9 @@ describe('PaddleController handed orientation', () => {
     expect(bladeCenter(pose).x).toBeLessThan(pose.position.x);
   });
 
-  it('turns into a compact backhand within two camera frames', () => {
+  // One frame slower than before: the side must be confirmed for ~2 camera
+  // frames so a flickering landmark can't flip the blade (it did, constantly).
+  it('turns into a compact backhand within three camera frames', () => {
     const controller = new PaddleController();
     controller.update(trackedMotion(0), defaultCalibration('camera'), DEFAULT_SETTINGS, 100);
     const backhand = trackedMotion(0);
@@ -357,8 +374,8 @@ describe('PaddleController handed orientation', () => {
       shoulder: { x: -0.08, y: 0.08, z: 0 },
     };
     backhand.rawArmOffsets = backhand.armOffsets;
-    controller.update(backhand, defaultCalibration('camera'), DEFAULT_SETTINGS, 116);
-    const pose = controller.update(backhand, defaultCalibration('camera'), DEFAULT_SETTINGS, 132);
+    let pose = controller.update(backhand, defaultCalibration('camera'), DEFAULT_SETTINGS, 116);
+    for (let t = 132; t <= 216; t += 16) pose = controller.update(backhand, defaultCalibration('camera'), DEFAULT_SETTINGS, t);
     expect(bladeCenter(pose).x).toBeLessThan(pose.position.x);
   });
 
