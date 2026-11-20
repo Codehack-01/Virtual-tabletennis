@@ -44,7 +44,7 @@ function preflightProblems(): string[] {
   return problems;
 }
 
-type DockIconName = 'feed' | 'play' | 'reset' | 'calibrate' | 'settings' | 'outdoor' | 'indoor';
+type DockIconName = 'feed' | 'play' | 'reset' | 'calibrate' | 'settings' | 'outdoor' | 'indoor' | 'lines' | 'linesOff';
 
 function DockIcon({ name }: { name: DockIconName }) {
   return (
@@ -79,6 +79,13 @@ function DockIcon({ name }: { name: DockIconName }) {
         <>
           <path d="M3.5 10.5 12 4.5l8.5 6V19.5h-17Z" />
           <path d="M8 19.5v-5h8v5M8 14.5h8" />
+        </>
+      )}
+      {(name === 'lines' || name === 'linesOff') && (
+        <>
+          <circle cx="12" cy="5" r="1.6" />
+          <path d="M8 9.5h8M12 9.5v5M12 14.5l-3 5M12 14.5l3 5M8 9.5l-2 4M16 9.5l2 4" />
+          {name === 'linesOff' && <path d="M4 4l16 16" />}
         </>
       )}
       {name === 'settings' && (
@@ -216,6 +223,15 @@ export default function App() {
             onClick={() => updateSettings({ environment: settings.environment === 'outdoor' ? 'indoor' : 'outdoor' })}
           >
             <DockIcon name={settings.environment === 'outdoor' ? 'indoor' : 'outdoor'} />
+          </button>
+          <button
+            className="dock-button"
+            data-label={settings.showOverlay ? 'Hide tracking lines' : 'Show tracking lines'}
+            aria-label={settings.showOverlay ? 'Hide the tracking lines on the camera' : 'Show the tracking lines on the camera'}
+            aria-pressed={settings.showOverlay}
+            onClick={() => updateSettings({ showOverlay: !settings.showOverlay })}
+          >
+            <DockIcon name={settings.showOverlay ? 'linesOff' : 'lines'} />
           </button>
           <button className="dock-button" data-label="Calibrate" aria-label="Calibrate tracking" onClick={() => engineRef.current?.startCalibration(true)} disabled={phase !== 'running'}>
             <DockIcon name="calibrate" />
