@@ -1,5 +1,7 @@
 # Virtual Table Tennis
 
+> **An experiment, built out of curiosity.** This is the first prototype — can a plain laptop webcam replace a controller for a fast sport? It works and it's fun, but expect rough edges.
+
 Play table tennis against a CPU opponent with your **real arm** — no controller, no sensors, just a laptop webcam. Your swing drives a 3D paddle, the ball follows real physics, and the first to 11 wins.
 
 ![Gameplay on the outdoor court](docs/gameplay-outdoor.jpg)
