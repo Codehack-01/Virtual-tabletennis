@@ -2,6 +2,12 @@
   "name": "table-tennis-poc",
   "private": true,
   "version": "0.1.0",
+  "description": "Webcam-controlled table tennis in the browser: MediaPipe Pose + three.js",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Codehack-01/Virtual-tabletennis.git"
+  },
   "type": "module",
   "scripts": {
     "setup:assets": "node scripts/setup-assets.mjs",
