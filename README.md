@@ -6,6 +6,8 @@ Play table tennis against a CPU opponent with your **real arm** — no controlle
 
 Everything runs locally in your browser. Webcam frames are processed on your device and are never recorded or uploaded.
 
+**If you like it, please ⭐ star the repo** — it helps other builders find it.
+
 ## Quick start
 
 Requires **Node.js 20+** and a recent **Chrome** or **Edge** (Safari and Firefox work, Chrome is fastest).
@@ -85,7 +87,7 @@ Settings are in the drawer (sliders icon) and are saved in your browser.
 
 ## Credits
 
-Built by [Bildyard](https://bildyard.com). If you share or build on this project, please credit **@adexbuilds** or **@bildyard** on Instagram or X.
+Built by [Bildyard](https://bildyard.com). If you share or build on this project, please credit **@adexbuilds** or **@bildyard** on Instagram or X. And if it helped you, a ⭐ on the repo is the best way to say thanks.
 
 - Pose tracking: [MediaPipe](https://developers.google.com/mediapipe) (Apache 2.0)
 - 3D: [three.js](https://threejs.org) (MIT) · UI: [React](https://react.dev) (MIT)
